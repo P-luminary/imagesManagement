@@ -20,7 +20,7 @@ conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
 
 # ------------------------------------
-# 数据表设计：支持动态维度/子标签创建
+# 数据表设计：支持动态维度/子标签创建 (与你现有结构一致)
 # ------------------------------------
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS t_files (
@@ -92,7 +92,7 @@ def insert_tag(parent, tag_name):
 class ImageManager(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("图片管理系统（动态维度 / 多标签）")
+        self.title("图片管理系统（动态维度 / 多标签，记忆勾选）")
         self.geometry("900x650")
 
         self.tab_control = ttk.Notebook(self)
@@ -103,6 +103,10 @@ class ImageManager(tk.Tk):
         self.tab_control.pack(expand=1, fill="both")
 
         self.selected_files = []
+
+        # 关键：保存每个维度的子标签勾选状态（会话内）
+        # 结构：{ "维度名称": { "子标签1": True/False, ... }, ... }
+        self.selected_tags_by_dim = {}
 
         self.setup_import_tab()
         self.setup_view_tab()
@@ -116,29 +120,26 @@ class ImageManager(tk.Tk):
 
         # 标签选择区
         self.tag_frame = tk.Frame(self.tab_import)
-        self.tag_frame.pack(pady=15)
+        self.tag_frame.pack(pady=15, fill="x")
 
-        # 大维度列表
-        tk.Label(self.tag_frame, text="大维度列表：").grid(row=0, column=0)
-        self.dim_listbox = tk.Listbox(self.tag_frame, height=8)
-        self.dim_listbox.grid(row=1, column=0)
+        # 大维度列表 (允许多选)
+        tk.Label(self.tag_frame, text="大维度列表（可多选）：").grid(row=0, column=0, sticky="w")
+        self.dim_listbox = tk.Listbox(self.tag_frame, height=8, selectmode=tk.MULTIPLE, exportselection=False)
+        self.dim_listbox.grid(row=1, column=0, sticky="nw")
         self.dim_listbox.bind("<<ListboxSelect>>", self.update_tag_checkboxes)
 
         # 新增维度按钮
-        tk.Button(self.tag_frame, text="新增大维度", command=self.add_dimension_window)\
-            .grid(row=2, column=0, pady=5)
+        tk.Button(self.tag_frame, text="新增大维度", command=self.add_dimension_window).grid(row=2, column=0, pady=5, sticky="w")
 
         # 子标签多选区
-        tk.Label(self.tag_frame, text="子标签（多选）:").grid(row=0, column=1)
+        tk.Label(self.tag_frame, text="子标签（多选，显示当前最后选中的维度）:").grid(row=0, column=1, sticky="w")
         self.tag_check_frame = tk.Frame(self.tag_frame)
-        self.tag_check_frame.grid(row=1, column=1)
+        self.tag_check_frame.grid(row=1, column=1, sticky="nw", padx=10)
 
         # 新增子标签按钮
-        tk.Button(self.tag_frame, text="新增子标签", command=self.add_tag_window)\
-            .grid(row=2, column=1)
+        tk.Button(self.tag_frame, text="新增子标签", command=self.add_tag_window).grid(row=2, column=1, sticky="w")
 
-        tk.Button(self.tab_import, text="保存图片和标签", command=self.save_files)\
-            .pack(pady=20)
+        tk.Button(self.tab_import, text="保存图片和标签", command=self.save_files).pack(pady=20)
 
         self.refresh_dimension_list()
 
@@ -153,27 +154,52 @@ class ImageManager(tk.Tk):
     def refresh_dimension_list(self):
         """刷新左侧维度列表"""
         self.dim_listbox.delete(0, tk.END)
-        for dim in get_all_dimensions():
+        dims = get_all_dimensions()
+        for dim in dims:
             self.dim_listbox.insert(tk.END, dim)
+        # 保持 selected_tags_by_dim 不清空，以便记忆继续有效
 
     def update_tag_checkboxes(self, event):
-        """当选择维度时，加载对应子标签（多选）"""
+        """当选择维度时，加载对应子标签并恢复勾选状态。
+           支持多选维度，但界面上显示的是最后一个被选中的维度的子标签（便于编辑）。
+           勾选变化会写回 self.selected_tags_by_dim，切换回该维度时会恢复。
+        """
+        # 清空当前标签区 UI
         for w in self.tag_check_frame.winfo_children():
             w.destroy()
 
         selection = self.dim_listbox.curselection()
         if not selection:
+            self.tag_vars = {}
             return
 
-        parent = self.dim_listbox.get(selection[0])
+        # 取最后一个被选中的维度用于在右侧展示其子标签（用户可在多个维度间切换）
+        last_idx = selection[-1]
+        parent = self.dim_listbox.get(last_idx)
+
         tags = get_tags_by_dimension(parent)
 
+        # ensure dict exists for this dimension
+        self.selected_tags_by_dim.setdefault(parent, {})
+
         self.tag_vars = {}
+
         for idx, tag in enumerate(tags):
             if tag.strip() == "":
                 continue
-            var = tk.BooleanVar()
-            cb = tk.Checkbutton(self.tag_check_frame, text=tag, variable=var)
+
+            # 恢复勾选状态（若不存在，默认为 False）
+            init_val = self.selected_tags_by_dim[parent].get(tag, False)
+            var = tk.BooleanVar(value=init_val)
+
+            # 当 checkbox 改变时把值写回 selected_tags_by_dim
+            def make_cmd(t=tag, p=parent, v=var):
+                def _cmd():
+                    self.selected_tags_by_dim.setdefault(p, {})
+                    self.selected_tags_by_dim[p][t] = v.get()
+                return _cmd
+
+            cb = tk.Checkbutton(self.tag_check_frame, text=tag, variable=var, command=make_cmd())
             cb.grid(row=idx, column=0, sticky="w")
             self.tag_vars[tag] = var
 
@@ -190,6 +216,8 @@ class ImageManager(tk.Tk):
             val = dim_var.get().strip()
             if val:
                 insert_dimension(val)
+                # 初始化记忆结构，确保后续切换能看到空集合
+                self.selected_tags_by_dim.setdefault(val, {})
                 self.refresh_dimension_list()
                 win.destroy()
 
@@ -199,10 +227,11 @@ class ImageManager(tk.Tk):
     def add_tag_window(self):
         selection = self.dim_listbox.curselection()
         if not selection:
-            messagebox.showwarning("警告", "请先选择大维度")
+            messagebox.showwarning("警告", "请先选择大维度（在左侧多选或单选）")
             return
 
-        parent = self.dim_listbox.get(selection[0])
+        # 使用最后一个被选中的维度作为目标维度
+        parent = self.dim_listbox.get(selection[-1])
 
         win = tk.Toplevel(self)
         win.title("新增子标签")
@@ -217,6 +246,10 @@ class ImageManager(tk.Tk):
             name = tag_var.get().strip()
             if name:
                 insert_tag(parent, name)
+                # 初始化该子标签在记忆结构里为 False（未勾选）
+                self.selected_tags_by_dim.setdefault(parent, {})
+                self.selected_tags_by_dim[parent][name] = False
+                # 刷新右侧显示（保持记忆）
                 self.update_tag_checkboxes(None)
                 win.destroy()
 
@@ -228,19 +261,18 @@ class ImageManager(tk.Tk):
             messagebox.showwarning("警告", "请先选择图片")
             return
 
-        selection = self.dim_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("警告", "请选择一个维度")
+        # 汇总所有维度下被勾选的标签 (parent, tag)
+        final_selected = []
+        for parent, tag_map in self.selected_tags_by_dim.items():
+            for tag_name, checked in tag_map.items():
+                if checked:
+                    final_selected.append((parent, tag_name))
+
+        if not final_selected:
+            messagebox.showwarning("警告", "请至少选择一个子标签（在右侧勾选）")
             return
 
-        parent = self.dim_listbox.get(selection[0])
-
-        chosen_tags = [t for t, v in self.tag_vars.items() if v.get()]
-        if not chosen_tags:
-            messagebox.showwarning("警告", "请至少选择一个子标签")
-            return
-
-        # 保存文件与标签
+        # 保存所有图片并写入关联
         for f in self.selected_files:
             file_name = os.path.basename(f)
             dest = os.path.join(FILES_DIR, f"{datetime.datetime.now().timestamp()}_{file_name}")
@@ -249,18 +281,19 @@ class ImageManager(tk.Tk):
             cursor.execute("INSERT INTO t_files (file_name, file_path) VALUES (?, ?)", (file_name, dest))
             file_id = cursor.lastrowid
 
-            # 保存标签关联
-            for tag in chosen_tags:
-                cursor.execute("SELECT tag_id FROM t_tags WHERE parent=? AND name=?", (parent, tag))
-                tag_id = cursor.fetchone()[0]
-                cursor.execute("INSERT INTO t_files_tags (file_id, tag_id) VALUES (?, ?)", (file_id, tag_id))
+            for parent, tag_name in final_selected:
+                cursor.execute("SELECT tag_id FROM t_tags WHERE parent=? AND name=?", (parent, tag_name))
+                row = cursor.fetchone()
+                if row:
+                    tag_id = row[0]
+                    cursor.execute("INSERT INTO t_files_tags (file_id, tag_id) VALUES (?, ?)", (file_id, tag_id))
 
         conn.commit()
         messagebox.showinfo("成功", "图片和标签保存成功！")
         self.selected_files = []
 
     # ================================================================
-    #                      查看图片 TAB
+    #                      查看图片 TAB (不变)
     # ================================================================
     def setup_view_tab(self):
         tk.Label(self.tab_view, text="输入【子标签】搜索图片:").pack(pady=10)
