@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS t_files (
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS t_tags (
     tag_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    parent TEXT,      -- 维度（大标签）
-    name TEXT         -- 子标签
+    parent TEXT,
+    name TEXT
 )
 ''')
 
@@ -88,13 +88,18 @@ def insert_tag(parent, tag_name):
 class ImageManager(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("图片管理系统（动态维度 / 多标签）")
-        self.geometry("900x720")
+        self.title("图片管理系统")
+        self.geometry("1000x720")
 
         self.selected_files = []
         # 记忆每个维度被勾选的子标签集合 {parent: set(tag1, tag2)}
         self.selected_tags_by_dim = {}
 
+        # 预览设置
+        self.preview_size = (300, 300)
+        self.preview_photo = None  # 保持引用防止被 GC
+
+        # 使用 Notebook（保持导入/查看两个 tab）
         self.tab_control = ttk.Notebook(self)
         self.tab_import = ttk.Frame(self.tab_control)
         self.tab_view = ttk.Frame(self.tab_control)
@@ -102,56 +107,75 @@ class ImageManager(tk.Tk):
         self.tab_control.add(self.tab_view, text="查看图片")
         self.tab_control.pack(expand=1, fill="both")
 
-        # 预留并创建图片预览区（固定大小 300x300）
-        self.preview_size = (300, 300)
-        self.preview_photo = None  # 保持引用防止被 GC
+        # 初始化 Tab 内容
         self.setup_import_tab()
         self.setup_view_tab()
 
     # ================================================================
-    #                      导入图片 TAB
+    #                      导入图片 TAB（左右布局）
     # ================================================================
     def setup_import_tab(self):
-        # 顶部预留图片区（固定尺寸）
-        preview_frame = tk.Frame(self.tab_import, width=self.preview_size[0], height=self.preview_size[1], bd=1, relief="solid")
-        preview_frame.pack(pady=10)
-        preview_frame.pack_propagate(False)  # 固定尺寸，不随内容改变
+        # 使用左右两个 frame：left_frame（维度/标签管理）、right_frame（预览与操作）
+        container = tk.Frame(self.tab_import)
+        container.pack(fill="both", expand=True, padx=10, pady=10)
 
-        self.preview_label = tk.Label(preview_frame, text="未选择图片", anchor="center")
-        self.preview_label.pack(expand=True, fill="both")
+        left_frame = tk.Frame(container)
+        left_frame.pack(side=tk.LEFT, fill="both", expand=True)
 
-        # 选择图片按钮（放在预留区下方一行）
-        btn_frame = tk.Frame(self.tab_import)
-        btn_frame.pack(pady=6)
-        tk.Button(btn_frame, text="选择图片", command=self.select_files).pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_frame, text="保存图片和标签", command=self.save_files).pack(side=tk.LEFT, padx=6)
+        right_frame = tk.Frame(container, width=360)
+        right_frame.pack(side=tk.RIGHT, fill="y")
+        right_frame.pack_propagate(False)
 
-        # 主体：标签选择区（不随预览区移动）
-        self.tag_frame = tk.Frame(self.tab_import)
-        self.tag_frame.pack(pady=10, fill="both", expand=False)
-
-        # 大维度列表
-        tk.Label(self.tag_frame, text="大维度列表：").grid(row=0, column=0, sticky="w")
-        self.dim_listbox = tk.Listbox(self.tag_frame, height=8)
-        self.dim_listbox.grid(row=1, column=0, sticky="nw")
+        # ----------------- 左侧（维度 + 子标签 管理） -----------------
+        # 大维度列表与操作
+        tk.Label(left_frame, text="大维度列表：").grid(row=0, column=0, sticky="w")
+        self.dim_listbox = tk.Listbox(left_frame, height=18, exportselection=False)
+        self.dim_listbox.grid(row=1, column=0, rowspan=10, sticky="nwes", padx=(0, 10))
         self.dim_listbox.bind("<<ListboxSelect>>", self.update_tag_checkboxes)
 
-        # 大维度按钮
-        tk.Button(self.tag_frame, text="新增大维度", command=self.add_dimension_window).grid(row=2, column=0, pady=3, sticky="w")
-        tk.Button(self.tag_frame, text="编辑大维度", command=self.edit_dimension_window).grid(row=3, column=0, pady=3, sticky="w")
-        tk.Button(self.tag_frame, text="删除大维度", command=self.delete_dimension).grid(row=4, column=0, pady=3, sticky="w")
+        # 维度按钮
+        btn_dim_frame = tk.Frame(left_frame)
+        btn_dim_frame.grid(row=11, column=0, pady=6, sticky="w")
+        tk.Button(btn_dim_frame, text="新增大维度", command=self.add_dimension_window).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_dim_frame, text="编辑大维度", command=self.edit_dimension_window).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_dim_frame, text="删除大维度", command=self.delete_dimension).pack(side=tk.LEFT, padx=4)
 
-        # 子标签多选区
-        tk.Label(self.tag_frame, text="子标签（多选）:").grid(row=0, column=1, sticky="w")
-        self.tag_check_frame = tk.Frame(self.tag_frame)
-        self.tag_check_frame.grid(row=1, column=1, sticky="nw", padx=10)
+        # 子标签区
+        tk.Label(left_frame, text="子标签（多选）:").grid(row=0, column=1, sticky="w")
+        self.tag_check_frame = tk.Frame(left_frame)
+        self.tag_check_frame.grid(row=1, column=1, rowspan=10, sticky="nw")
 
         # 子标签按钮
-        tk.Button(self.tag_frame, text="新增子标签", command=self.add_tag_window).grid(row=2, column=1, pady=3, sticky="w")
-        tk.Button(self.tag_frame, text="编辑子标签", command=self.edit_tag_window).grid(row=3, column=1, pady=3, sticky="w")
-        tk.Button(self.tag_frame, text="删除子标签", command=self.delete_tag).grid(row=4, column=1, pady=3, sticky="w")
+        btn_tag_frame = tk.Frame(left_frame)
+        btn_tag_frame.grid(row=11, column=1, pady=6, sticky="w")
+        tk.Button(btn_tag_frame, text="新增子标签", command=self.add_tag_window).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_tag_frame, text="编辑子标签", command=self.edit_tag_window).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_tag_frame, text="删除子标签", command=self.delete_tag).pack(side=tk.LEFT, padx=4)
 
-        # refresh dims
+        # make left_frame grid expand properly
+        left_frame.grid_columnconfigure(0, weight=0)
+        left_frame.grid_columnconfigure(1, weight=1)
+        left_frame.grid_rowconfigure(1, weight=1)
+
+        # ----------------- 右侧（图片预览 + 操作） -----------------
+        # 预览区域（固定大小）
+        preview_container = tk.Frame(right_frame, width=self.preview_size[0], height=self.preview_size[1], bd=1, relief="solid")
+        preview_container.pack(pady=10)
+        preview_container.pack_propagate(False)  # 保持固定大小
+        self.preview_label = tk.Label(preview_container, text="未选择图片", anchor="center")
+        self.preview_label.pack(expand=True, fill="both")
+
+        # 图片信息显示（文件名）
+        self.preview_name_var = tk.StringVar(value="")
+        tk.Label(right_frame, textvariable=self.preview_name_var, wraplength=320, anchor="w", justify="left").pack(pady=(6, 0), padx=6, fill="x")
+
+        # 右侧操作按钮
+        op_frame = tk.Frame(right_frame)
+        op_frame.pack(pady=12)
+        tk.Button(op_frame, text="选择图片", command=self.select_files).pack(side=tk.LEFT, padx=6)
+        tk.Button(op_frame, text="保存图片和标签", command=self.save_files).pack(side=tk.LEFT, padx=6)
+
+        # refresh dims into listbox
         self.refresh_dimension_list()
 
     # ------------------ 选择图片 ------------------
@@ -161,9 +185,11 @@ class ImageManager(tk.Tk):
             filetypes=[("图片文件", "*.jpg *.png *.jpeg *.bmp")])
         if files:
             self.selected_files = files
-            # 只展示第一张（要求）
+            # 展示第一张（要求）
             first = files[0]
             self.show_preview(first)
+            # 显示文件名
+            self.preview_name_var.set(os.path.basename(first))
             messagebox.showinfo("提示", f"已选择 {len(files)} 张图片（仅预览第一张）")
 
     def show_preview(self, image_path):
@@ -179,9 +205,10 @@ class ImageManager(tk.Tk):
             bg.paste(img, (x, y))
             self.preview_photo = ImageTk.PhotoImage(bg)
             self.preview_label.config(image=self.preview_photo, text="")
-        except Exception as e:
+        except Exception:
             # 回退到文本提示
             self.preview_label.config(image="", text="无法打开图片")
+            self.preview_name_var.set("")
 
     # ------------------ 刷新维度列表 ------------------
     def refresh_dimension_list(self):
@@ -418,9 +445,10 @@ class ImageManager(tk.Tk):
         # 清除预览显示（保留占位）
         self.preview_label.config(image="", text="未选择图片")
         self.preview_photo = None
+        self.preview_name_var.set("")
 
     # ================================================================
-    #                      查看图片 TAB
+    #                      查看图片 TAB（保持不变）
     # ================================================================
     def setup_view_tab(self):
         tk.Label(self.tab_view, text="输入【子标签】搜索图片:").pack(pady=10)
