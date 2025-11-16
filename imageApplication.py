@@ -82,8 +82,25 @@ def insert_tag(parent, tag_name):
         conn.commit()
 
 
+# -------------------------
+# 路径解析帮助函数
+# -------------------------
+def resolve_path(db_path_value):
+    """
+    把数据库里存的路径（可能是绝对路径，也可能是相对路径）解析为可打开的绝对路径。
+    规则：
+      - 如果 db_path_value 是绝对路径（os.path.isabs），直接返回；
+      - 否则按 BASE_DIR/db_path_value 拼接并返回。
+    """
+    if not db_path_value:
+        return None
+    if os.path.isabs(db_path_value):
+        return db_path_value
+    return os.path.join(BASE_DIR, db_path_value)
+
+
 # ================================================================
-#                      GUI 主界面
+#                      GUI 主界面（左右布局）
 # ================================================================
 class ImageManager(tk.Tk):
     def __init__(self):
@@ -190,7 +207,7 @@ class ImageManager(tk.Tk):
             self.show_preview(first)
             # 显示文件名
             self.preview_name_var.set(os.path.basename(first))
-            messagebox.showinfo("提示", f"已选择 {len(files)} 张图片（仅预览第一张）")
+            messagebox.showinfo("提示", f"已选择 {len(files)} 张图片")
 
     def show_preview(self, image_path):
         """在固定预览区显示图片，按比例缩放到 preview_size"""
@@ -407,7 +424,7 @@ class ImageManager(tk.Tk):
 
         tk.Button(win, text="删除", command=confirm_delete).pack(pady=10)
 
-    # ------------------ 保存图片 + 标签 ------------------
+    # ------------------ 保存图片 + 标签（改为保存相对路径） ------------------
     def save_files(self):
         if not self.selected_files:
             messagebox.showwarning("警告", "请先选择图片")
@@ -423,10 +440,15 @@ class ImageManager(tk.Tk):
 
         for f in self.selected_files:
             file_name = os.path.basename(f)
-            dest = os.path.join(FILES_DIR, f"{datetime.datetime.now().timestamp()}_{file_name}")
-            shutil.copy(f, dest)
+            timestamp = datetime.datetime.now().timestamp()
+            new_filename = f"{timestamp}_{file_name}"
+            dest_abs = os.path.join(FILES_DIR, new_filename)
+            # copy file to project files folder (absolute path)
+            shutil.copy(f, dest_abs)
 
-            cursor.execute("INSERT INTO t_files (file_name, file_path) VALUES (?, ?)", (file_name, dest))
+            # store relative path in DB so project can move across machines
+            rel_path = os.path.relpath(dest_abs, BASE_DIR)  # like 'files/xxx.jpg'
+            cursor.execute("INSERT INTO t_files (file_name, file_path) VALUES (?, ?)", (file_name, rel_path))
             file_id = cursor.lastrowid
 
             for parent, tag in chosen_tags:
@@ -448,7 +470,7 @@ class ImageManager(tk.Tk):
         self.preview_name_var.set("")
 
     # ================================================================
-    #                      查看图片 TAB（保持不变）
+    #                      查看图片 TAB（保持不变，但读取路径改为解析）
     # ================================================================
     def setup_view_tab(self):
         tk.Label(self.tab_view, text="输入【子标签】搜索图片:").pack(pady=10)
@@ -476,7 +498,15 @@ class ImageManager(tk.Tk):
             WHERE t.name = ?
         ''', (tag_name,))
         rows = cursor.fetchall()
-        self.search_results = [r[0] for r in rows]
+        # resolve each db path to absolute path for opening
+        abs_paths = []
+        for r in rows:
+            dbp = r[0]
+            abs_p = resolve_path(dbp)
+            if abs_p and os.path.exists(abs_p):
+                abs_paths.append(abs_p)
+        self.search_results = abs_paths
+
         for idx, path in enumerate(self.search_results):
             try:
                 img = Image.open(path)
@@ -490,13 +520,18 @@ class ImageManager(tk.Tk):
                 continue
 
     def show_full_image(self, path):
-        win = tk.Toplevel(self)
-        win.title("查看图片")
-        img = Image.open(path)
-        photo = ImageTk.PhotoImage(img)
-        lbl = tk.Label(win, image=photo)
-        lbl.image = photo
-        lbl.pack()
+        # path should be absolute; if not, resolve
+        abs_p = resolve_path(path) if not os.path.isabs(path) else path
+        try:
+            win = tk.Toplevel(self)
+            win.title("查看图片")
+            img = Image.open(abs_p)
+            photo = ImageTk.PhotoImage(img)
+            lbl = tk.Label(win, image=photo)
+            lbl.image = photo
+            lbl.pack()
+        except Exception:
+            messagebox.showerror("错误", "打开图片失败（文件可能不存在）")
 
     def download_zip(self):
         if not self.search_results:
@@ -509,6 +544,7 @@ class ImageManager(tk.Tk):
         if zip_path:
             with zipfile.ZipFile(zip_path, "w") as zf:
                 for p in self.search_results:
+                    # p already absolute path
                     zf.write(p, os.path.basename(p))
             messagebox.showinfo("成功", "压缩包已生成！")
 
