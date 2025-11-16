@@ -470,43 +470,114 @@ class ImageManager(tk.Tk):
         self.preview_name_var.set("")
 
     # ================================================================
-    #                      查看图片 TAB（保持不变，但读取路径改为解析）
+    #                      查看图片 TAB（多标签 AND/OR 搜索）
     # ================================================================
     def setup_view_tab(self):
-        tk.Label(self.tab_view, text="输入【子标签】搜索图片:").pack(pady=10)
-        self.search_var = tk.StringVar()
-        tk.Entry(self.tab_view, textvariable=self.search_var).pack()
-        tk.Button(self.tab_view, text="搜索", command=self.search_images).pack(pady=5)
+        top_frame = tk.Frame(self.tab_view)
+        top_frame.pack(fill="x", pady=6)
 
+        tk.Label(top_frame, text="输入子标签（逗号或空格分隔）:").pack(side=tk.LEFT, padx=(6, 4))
+        self.search_var = tk.StringVar()
+        tk.Entry(top_frame, textvariable=self.search_var, width=40).pack(side=tk.LEFT, padx=(0, 6))
+
+        # AND / OR 模式选择
+        self.search_mode_var = tk.StringVar(value="OR")  # 默认 OR
+        tk.Radiobutton(top_frame, text="OR（任一）", variable=self.search_mode_var, value="OR").pack(side=tk.LEFT, padx=4)
+        tk.Radiobutton(top_frame, text="AND（全部）", variable=self.search_mode_var, value="AND").pack(side=tk.LEFT, padx=4)
+
+        tk.Button(top_frame, text="搜索", command=self.search_images).pack(side=tk.LEFT, padx=6)
+
+        # 结果区（图片缩略图）
         self.image_frame = tk.Frame(self.tab_view)
-        self.image_frame.pack(fill="both", expand=True)
-        tk.Button(self.tab_view, text="下载压缩包", command=self.download_zip).pack(pady=10)
+        self.image_frame.pack(fill="both", expand=True, padx=6, pady=6)
+
+        # 下载按钮
+        btn_frame = tk.Frame(self.tab_view)
+        btn_frame.pack(fill="x", pady=(0, 8))
+        tk.Button(btn_frame, text="下载压缩包", command=self.download_zip).pack(side=tk.RIGHT, padx=10)
+
         self.search_results = []
 
     def search_images(self):
+        """支持多标签搜索，AND / OR 两种模式"""
+        # 清空显示区
         for w in self.image_frame.winfo_children():
             w.destroy()
-        tag_name = self.search_var.get().strip()
-        if not tag_name:
-            messagebox.showwarning("警告", "请输入子标签名称")
+
+        raw = self.search_var.get().strip()
+        if not raw:
+            messagebox.showwarning("警告", "请输入至少一个子标签")
             return
-        cursor.execute('''
-            SELECT f.file_path 
-            FROM t_files f
-            JOIN t_files_tags ft ON f.file_id = ft.file_id
-            JOIN t_tags t ON t.tag_id = ft.tag_id
-            WHERE t.name = ?
-        ''', (tag_name,))
-        rows = cursor.fetchall()
-        # resolve each db path to absolute path for opening
+
+        # 解析标签名（逗号或空格分隔）
+        parts = [p.strip() for p in raw.replace(",", " ").split() if p.strip()]
+        if not parts:
+            messagebox.showwarning("警告", "请输入有效的标签名称")
+            return
+
+        # 查出每个标签对应的 tag_id
+        tag_ids = []
+        missing = []
+        for name in parts:
+            cursor.execute("SELECT tag_id FROM t_tags WHERE name=?", (name,))
+            r = cursor.fetchone()
+            if r:
+                tag_ids.append(r[0])
+            else:
+                missing.append(name)
+
+        if missing:
+            messagebox.showinfo("提示", f"以下标签未找到：{', '.join(missing)}\n请检查标签名称或先在左侧创建标签。")
+            return
+
+        if not tag_ids:
+            messagebox.showinfo("提示", "未找到任何标签ID，取消搜索。")
+            return
+
+        mode = self.search_mode_var.get()
+
+        # 根据模式构造 SQL
+        if mode == "OR":
+            # OR：任意一个标签匹配
+            placeholder = ",".join("?" * len(tag_ids))
+            sql = f"""
+                SELECT DISTINCT f.file_id, f.file_path
+                FROM t_files f
+                JOIN t_files_tags ft ON f.file_id = ft.file_id
+                WHERE ft.tag_id IN ({placeholder})
+            """
+            cursor.execute(sql, tag_ids)
+            rows = cursor.fetchall()
+        else:
+            # AND：必须同时包含所有标签 —— 使用 GROUP BY + HAVING COUNT = len(tag_ids)
+            placeholder = ",".join("?" * len(tag_ids))
+            sql = f"""
+                SELECT f.file_id, f.file_path
+                FROM t_files f
+                JOIN t_files_tags ft ON f.file_id = ft.file_id
+                WHERE ft.tag_id IN ({placeholder})
+                GROUP BY f.file_id
+                HAVING COUNT(DISTINCT ft.tag_id) = {len(tag_ids)}
+            """
+            cursor.execute(sql, tag_ids)
+            rows = cursor.fetchall()
+
+        # 解析路径并过滤不存在的文件
         abs_paths = []
         for r in rows:
-            dbp = r[0]
+            dbp = r[1]
             abs_p = resolve_path(dbp)
             if abs_p and os.path.exists(abs_p):
                 abs_paths.append(abs_p)
+
+        if not abs_paths:
+            messagebox.showinfo("提示", "未找到匹配且存在的图片文件")
+            self.search_results = []
+            return
+
         self.search_results = abs_paths
 
+        # 显示缩略图网格
         for idx, path in enumerate(self.search_results):
             try:
                 img = Image.open(path)
@@ -516,7 +587,7 @@ class ImageManager(tk.Tk):
                 lbl.image = photo
                 lbl.grid(row=idx // 6, column=idx % 6, padx=5, pady=5)
                 lbl.bind("<Button-1>", lambda e, p=path: self.show_full_image(p))
-            except:
+            except Exception:
                 continue
 
     def show_full_image(self, path):
