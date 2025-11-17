@@ -1,11 +1,1 @@
-代码和db以及file文件都处于同级目录下
-项目GitHub地址：https://github.com/P-luminary/imagesManagement
-clone命令：git clone https://github.com/P-luminary/imagesManagement.git
-
-项目文件结构如下：
-【项目工程】
-|
-|--files(这里面保存图片文件)
-|--xxx.py
-|--images.db
-|--Readme.md
+<img width="572" height="243" alt="image" src="https://github.com/user-attachments/assets/56b214c8-daad-4b60-bc69-7d0617a1298a" />
