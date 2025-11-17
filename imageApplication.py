@@ -282,7 +282,7 @@ class ImageManager(tk.Tk):
                 self.refresh_dimension_list()
                 win.destroy()
 
-        tk.Button(win, text="保存", command=save_dim).pack(pady=10)
+        tk.Button(win, text="保存", command=save_dim).pack(pady=60)
 
     # ------------------ 编辑大维度 ------------------
     def edit_dimension_window(self):
@@ -591,7 +591,6 @@ class ImageManager(tk.Tk):
                 continue
 
     def show_full_image(self, path):
-        # path should be absolute; if not, resolve
         abs_p = resolve_path(path) if not os.path.isabs(path) else path
         try:
             win = tk.Toplevel(self)
