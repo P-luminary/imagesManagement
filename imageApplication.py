@@ -623,6 +623,9 @@ class ImageManager(tk.Tk):
                 w.destroy()
         self.search_results = []
 
+    # ================================================================
+    # 更新 search_images_by_selected，让缩略图可选中
+    # ================================================================
     def search_images_by_selected(self):
         # collect selected tags across all dims
         selected = []
@@ -648,18 +651,15 @@ class ImageManager(tk.Tk):
             return
 
         mode = self.search_mode_var.get()
+        placeholder = ",".join("?" * len(tag_ids))
         if mode == "OR":
-            placeholder = ",".join("?" * len(tag_ids))
             sql = f"""
                 SELECT DISTINCT f.file_id, f.file_path
                 FROM t_files f
                 JOIN t_files_tags ft ON f.file_id = ft.file_id
                 WHERE ft.tag_id IN ({placeholder})
             """
-            cursor.execute(sql, tag_ids)
-            rows = cursor.fetchall()
         else:
-            placeholder = ",".join("?" * len(tag_ids))
             sql = f"""
                 SELECT f.file_id, f.file_path
                 FROM t_files f
@@ -668,16 +668,11 @@ class ImageManager(tk.Tk):
                 GROUP BY f.file_id
                 HAVING COUNT(DISTINCT ft.tag_id) = {len(tag_ids)}
             """
-            cursor.execute(sql, tag_ids)
-            rows = cursor.fetchall()
+        cursor.execute(sql, tag_ids)
+        rows = cursor.fetchall()
 
         # resolve and filter existing paths
-        abs_paths = []
-        for r in rows:
-            dbp = r[1]
-            abs_p = resolve_path(dbp)
-            if abs_p and os.path.exists(abs_p):
-                abs_paths.append(abs_p)
+        abs_paths = [resolve_path(r[1]) for r in rows if r[1] and os.path.exists(resolve_path(r[1]))]
 
         # clear previous thumbnails
         for w in self.thumb_inner.winfo_children():
@@ -686,9 +681,11 @@ class ImageManager(tk.Tk):
         if not abs_paths:
             messagebox.showinfo("提示", "未找到匹配且存在的图片文件")
             self.search_results = []
+            self.thumb_selected_vars = {}
             return
 
         self.search_results = abs_paths
+        self.thumb_selected_vars = {}  # 保存每个缩略图选中状态
 
         # populate thumbnail grid in thumb_inner
         cols = 6
@@ -697,10 +694,20 @@ class ImageManager(tk.Tk):
                 img = Image.open(path)
                 img.thumbnail((120, 120))
                 photo = ImageTk.PhotoImage(img)
-                lbl = tk.Label(self.thumb_inner, image=photo, bd=1, relief="solid")
+
+                frame = tk.Frame(self.thumb_inner, bd=1, relief="solid")
+                frame.grid(row=idx // cols, column=idx % cols, padx=6, pady=6)
+
+                lbl = tk.Label(frame, image=photo)
                 lbl.image = photo
-                lbl.grid(row=idx // cols, column=idx % cols, padx=6, pady=6)
+                lbl.pack()
                 lbl.bind("<Double-Button-1>", lambda e, p=path: self.show_full_image(p))
+
+                # 勾选框，默认选中
+                var = tk.BooleanVar(value=True)
+                chk = tk.Checkbutton(frame, text=os.path.basename(path), variable=var, anchor="w", justify="left")
+                chk.pack(fill="x")
+                self.thumb_selected_vars[path] = var
             except Exception:
                 continue
 
@@ -722,18 +729,27 @@ class ImageManager(tk.Tk):
         except Exception:
             messagebox.showerror("错误", "打开图片失败（文件可能不存在）")
 
+
+    # ================================================================
+    # 修改 download_zip，只下载被选中的图片
+    # ================================================================
     def download_zip(self):
-        if not self.search_results:
+        if not hasattr(self, "thumb_selected_vars") or not self.thumb_selected_vars:
             messagebox.showwarning("警告", "没有图片可下载")
             return
+
+        selected_paths = [p for p, var in self.thumb_selected_vars.items() if var.get()]
+        if not selected_paths:
+            messagebox.showwarning("警告", "没有选中图片")
+            return
+
         zip_path = filedialog.asksaveasfilename(
             defaultextension=".zip",
             filetypes=[("Zip文件", "*.zip")]
         )
         if zip_path:
             with zipfile.ZipFile(zip_path, "w") as zf:
-                for p in self.search_results:
-                    # 写入文件（使用文件名作为压缩包内的名称）
+                for p in selected_paths:
                     zf.write(p, os.path.basename(p))
             messagebox.showinfo("成功", "压缩包已生成！")
 
