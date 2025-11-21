@@ -272,7 +272,7 @@ class ImageManager(tk.Tk):
     def add_dimension_window(self):
         win = tk.Toplevel(self)
         win.title("新增大维度")
-        win.geometry("400x180")
+        win.geometry("400x200")
         win.resizable(False, False)
         win.transient(self)  # 保持在主窗口上方
 
@@ -435,7 +435,7 @@ class ImageManager(tk.Tk):
             return
         win = tk.Toplevel(self)
         win.title("编辑子标签")
-        win.geometry("420x280")
+        win.geometry("420x320")
         win.resizable(False, False)
         win.transient(self)
 
