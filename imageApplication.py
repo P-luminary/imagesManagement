@@ -564,6 +564,7 @@ class ImageManager(tk.Tk):
 
         for parent in dims:
             # 创建一个容器，包含 header 和 content，确保它们紧邻
+            # 为缩略图动态调整增加条件
             container = tk.Frame(self.left_inner)
             container.pack(fill="x", pady=(2, 2))
 
@@ -646,7 +647,7 @@ class ImageManager(tk.Tk):
         self.search_results = []
 
     # ================================================================
-    # 更新 search_images_by_selected，让缩略图可选中
+    # 更新 search_images_by_selected，让缩略图可选中并动态布局
     # ================================================================
     def search_images_by_selected(self):
         # collect selected tags across all dims
@@ -696,11 +697,10 @@ class ImageManager(tk.Tk):
         # resolve and filter existing paths
         abs_paths = [resolve_path(r[1]) for r in rows if r[1] and os.path.exists(resolve_path(r[1]))]
 
-        # clear previous thumbnails
-        for w in self.thumb_inner.winfo_children():
-            w.destroy()
-
         if not abs_paths:
+            # clear previous thumbnails
+            for w in self.thumb_inner.winfo_children():
+                w.destroy()
             messagebox.showinfo("提示", "未找到匹配且存在的图片文件")
             self.search_results = []
             self.thumb_selected_vars = {}
@@ -709,29 +709,66 @@ class ImageManager(tk.Tk):
         self.search_results = abs_paths
         self.thumb_selected_vars = {}  # 保存每个缩略图选中状态
 
+        # 渲染缩略图
+        self._render_thumbnails()
+
+        # 绑定窗口大小变化事件，实现动态响应
+        if not hasattr(self, '_resize_bound'):
+            self.thumb_canvas.bind("<Configure>", lambda e: self._on_canvas_resize())
+            self._resize_bound = True
+
+    def _render_thumbnails(self):
+        """根据当前容器宽度渲染缩略图网格"""
+        # clear previous thumbnails
+        for w in self.thumb_inner.winfo_children():
+            w.destroy()
+
+        if not self.search_results:
+            return
+
+        # 动态计算列数（根据容器宽度）
+        canvas_width = self.thumb_canvas.winfo_width()
+        thumb_width = 120  # 缩略图宽度
+        frame_padding = 12  # 每个 frame 的 padx (6*2)
+        item_width = thumb_width + frame_padding + 10  # 额外空间
+
+        # 至少1列，最多根据宽度计算
+        cols = max(1, (canvas_width - 20) // item_width)  # 20是额外边距
+
         # populate thumbnail grid in thumb_inner
-        cols = 6
         for idx, path in enumerate(self.search_results):
             try:
                 img = Image.open(path)
                 img.thumbnail((120, 120))
                 photo = ImageTk.PhotoImage(img)
 
-                frame = tk.Frame(self.thumb_inner, bd=1, relief="solid")
-                frame.grid(row=idx // cols, column=idx % cols, padx=6, pady=6)
+                frame = tk.Frame(self.thumb_inner, bd=1, relief="solid", bg="white")
+                frame.grid(row=idx // cols, column=idx % cols, padx=6, pady=6, sticky="n")
 
-                lbl = tk.Label(frame, image=photo)
+                lbl = tk.Label(frame, image=photo, bg="white")
                 lbl.image = photo
                 lbl.pack()
                 lbl.bind("<Double-Button-1>", lambda e, p=path: self.show_full_image(p))
 
                 # 勾选框，默认选中
                 var = tk.BooleanVar(value=True)
-                chk = tk.Checkbutton(frame, text=os.path.basename(path), variable=var, anchor="w", justify="left")
-                chk.pack(fill="x")
+                filename = os.path.basename(path)
+                # 文件名过长时截断显示
+                display_name = filename if len(filename) <= 20 else filename[:17] + "..."
+                chk = tk.Checkbutton(frame, text=display_name, variable=var,
+                                     anchor="w", justify="left", bg="white", wraplength=110)
+                chk.pack(fill="x", padx=2)
                 self.thumb_selected_vars[path] = var
             except Exception:
                 continue
+
+    def _on_canvas_resize(self):
+        """窗口大小改变时重新布局缩略图 改动缩略图"""
+        if hasattr(self, 'search_results') and self.search_results:
+            # 使用 after 避免频繁重绘
+            if hasattr(self, '_resize_after_id'):
+                self.after_cancel(self._resize_after_id)
+            self._resize_after_id = self.after(200, self._render_thumbnails)
 
     def show_full_image(self, path):
         abs_p = resolve_path(path) if not os.path.isabs(path) else path
