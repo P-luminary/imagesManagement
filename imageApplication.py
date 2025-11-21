@@ -272,9 +272,24 @@ class ImageManager(tk.Tk):
     def add_dimension_window(self):
         win = tk.Toplevel(self)
         win.title("新增大维度")
-        tk.Label(win, text="维度名称:").pack(pady=5)
+        win.geometry("400x180")
+        win.resizable(False, False)
+        win.transient(self)  # 保持在主窗口上方
+
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 180) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text="维度名称:", font=("Arial", 10)).pack(pady=(10, 5))
         dim_var = tk.StringVar()
-        tk.Entry(win, textvariable=dim_var).pack(pady=5)
+        entry = tk.Entry(frame, textvariable=dim_var, width=30, font=("Arial", 10))
+        entry.pack(pady=5)
+        entry.focus_set()
 
         def save_dim():
             val = dim_var.get().strip()
@@ -282,8 +297,17 @@ class ImageManager(tk.Tk):
                 insert_dimension(val)
                 self.refresh_dimension_list()
                 win.destroy()
+            else:
+                messagebox.showwarning("警告", "请输入维度名称", parent=win)
 
-        tk.Button(win, text="保存", command=save_dim).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="保存", command=save_dim, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                     padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
+
+        # 绑定回车键
+        win.bind("<Return>", lambda e: save_dim())
 
     def edit_dimension_window(self):
         selection = self.dim_listbox.curselection()
@@ -293,21 +317,47 @@ class ImageManager(tk.Tk):
         old_name = self.dim_listbox.get(selection[0])
         win = tk.Toplevel(self)
         win.title("编辑大维度")
-        tk.Label(win, text="修改维度名称:").pack(pady=5)
+        win.geometry("400x200")
+        win.resizable(False, False)
+        win.transient(self)
+
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 200) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=f"原维度名称: {old_name}", font=("Arial", 9), fg="gray").pack(pady=(5, 10))
+        tk.Label(frame, text="修改为:", font=("Arial", 10)).pack(pady=5)
         dim_var = tk.StringVar(value=old_name)
-        tk.Entry(win, textvariable=dim_var).pack(pady=5)
+        entry = tk.Entry(frame, textvariable=dim_var, width=30, font=("Arial", 10))
+        entry.pack(pady=5)
+        entry.focus_set()
+        entry.select_range(0, tk.END)
 
         def save_edit():
             new_name = dim_var.get().strip()
-            if new_name and new_name != old_name:
+            if not new_name:
+                messagebox.showwarning("警告", "请输入维度名称", parent=win)
+                return
+            if new_name != old_name:
                 cursor.execute("UPDATE t_tags SET parent=? WHERE parent=?", (new_name, old_name))
                 conn.commit()
                 if old_name in self.selected_tags_by_dim:
                     self.selected_tags_by_dim[new_name] = self.selected_tags_by_dim.pop(old_name)
                 self.refresh_dimension_list()
-                win.destroy()
+            win.destroy()
 
-        tk.Button(win, text="保存", command=save_edit).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="保存", command=save_edit, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                      padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
+
+        win.bind("<Return>", lambda e: save_edit())
 
     def delete_dimension(self):
         selection = self.dim_listbox.curselection()
@@ -333,10 +383,25 @@ class ImageManager(tk.Tk):
         parent = self.dim_listbox.get(selection[0])
         win = tk.Toplevel(self)
         win.title("新增子标签")
-        tk.Label(win, text=f"维度：{parent}").pack(pady=5)
-        tk.Label(win, text="子标签名称:").pack(pady=5)
+        win.geometry("400x220")
+        win.resizable(False, False)
+        win.transient(self)
+
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 220) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=f"所属维度: {parent}", font=("Arial", 10, "bold"), fg="#1976D2").pack(pady=(5, 15))
+        tk.Label(frame, text="子标签名称:", font=("Arial", 10)).pack(pady=5)
         tag_var = tk.StringVar()
-        tk.Entry(win, textvariable=tag_var).pack()
+        entry = tk.Entry(frame, textvariable=tag_var, width=30, font=("Arial", 10))
+        entry.pack(pady=5)
+        entry.focus_set()
 
         def save_tag():
             name = tag_var.get().strip()
@@ -345,11 +410,18 @@ class ImageManager(tk.Tk):
                 self.selected_tags_by_dim.setdefault(parent, set())
                 self.selected_tags_by_dim[parent].discard(name)
                 self.update_tag_checkboxes(None)
-                # 刷新查看页的标签展示（safe）
                 self.refresh_view_tags()
                 win.destroy()
+            else:
+                messagebox.showwarning("警告", "请输入子标签名称", parent=win)
 
-        tk.Button(win, text="保存", command=save_tag).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="保存", command=save_tag, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                     padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
+
+        win.bind("<Return>", lambda e: save_tag())
 
     def edit_tag_window(self):
         selection = self.dim_listbox.curselection()
@@ -363,18 +435,40 @@ class ImageManager(tk.Tk):
             return
         win = tk.Toplevel(self)
         win.title("编辑子标签")
-        tk.Label(win, text=f"维度：{parent}").pack(pady=5)
-        tk.Label(win, text="选择子标签:").pack(pady=5)
+        win.geometry("420x280")
+        win.resizable(False, False)
+        win.transient(self)
+
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 420) // 2
+        y = self.winfo_y() + (self.winfo_height() - 280) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=f"所属维度: {parent}", font=("Arial", 10, "bold"), fg="#1976D2").pack(pady=(5, 15))
+
+        tk.Label(frame, text="选择要编辑的子标签:", font=("Arial", 10)).pack(pady=5)
         tag_var = tk.StringVar(value=tags[0])
-        tk.OptionMenu(win, tag_var, *tags).pack(pady=5)
-        tk.Label(win, text="修改为:").pack(pady=5)
+        option_menu = tk.OptionMenu(frame, tag_var, *tags)
+        option_menu.config(width=25)
+        option_menu.pack(pady=5)
+
+        tk.Label(frame, text="修改为:", font=("Arial", 10)).pack(pady=(15, 5))
         new_var = tk.StringVar()
-        tk.Entry(win, textvariable=new_var).pack(pady=5)
+        entry = tk.Entry(frame, textvariable=new_var, width=30, font=("Arial", 10))
+        entry.pack(pady=5)
+        entry.focus_set()
 
         def save_edit_tag():
             old_name = tag_var.get()
             new_name = new_var.get().strip()
-            if new_name and new_name != old_name:
+            if not new_name:
+                messagebox.showwarning("警告", "请输入新标签名称", parent=win)
+                return
+            if new_name != old_name:
                 cursor.execute("UPDATE t_tags SET name=? WHERE parent=? AND name=?", (new_name, parent, old_name))
                 conn.commit()
                 if parent in self.selected_tags_by_dim and old_name in self.selected_tags_by_dim[parent]:
@@ -382,9 +476,15 @@ class ImageManager(tk.Tk):
                     self.selected_tags_by_dim[parent].add(new_name)
                 self.update_tag_checkboxes(None)
                 self.refresh_view_tags()
-                win.destroy()
+            win.destroy()
 
-        tk.Button(win, text="保存", command=save_edit_tag).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="保存", command=save_edit_tag, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                          padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
+
+        win.bind("<Return>", lambda e: save_edit_tag())
 
     def delete_tag(self):
         selection = self.dim_listbox.curselection()
@@ -398,14 +498,32 @@ class ImageManager(tk.Tk):
             return
         win = tk.Toplevel(self)
         win.title("删除子标签")
-        tk.Label(win, text=f"维度：{parent}").pack(pady=5)
-        tk.Label(win, text="选择子标签:").pack(pady=5)
+        win.geometry("400x240")
+        win.resizable(False, False)
+        win.transient(self)
+
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 240) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=f"所属维度: {parent}", font=("Arial", 10, "bold"), fg="#1976D2").pack(pady=(5, 15))
+
+        tk.Label(frame, text="选择要删除的子标签:", font=("Arial", 10)).pack(pady=5)
         tag_var = tk.StringVar(value=tags[0])
-        tk.OptionMenu(win, tag_var, *tags).pack(pady=5)
+        option_menu = tk.OptionMenu(frame, tag_var, *tags)
+        option_menu.config(width=25)
+        option_menu.pack(pady=10)
+
+        tk.Label(frame, text="⚠️ 删除后无法恢复", font=("Arial", 9), fg="red").pack(pady=5)
 
         def confirm_delete():
             tname = tag_var.get()
-            if tname and messagebox.askyesno("确认", f"确定删除子标签【{tname}】吗？"):
+            if tname and messagebox.askyesno("确认删除", f"确定删除子标签【{tname}】吗？\n此操作无法撤销！", parent=win):
                 cursor.execute("SELECT tag_id FROM t_tags WHERE parent=? AND name=?", (parent, tname))
                 r = cursor.fetchone()
                 if r:
@@ -419,7 +537,11 @@ class ImageManager(tk.Tk):
                 self.refresh_view_tags()
                 win.destroy()
 
-        tk.Button(win, text="删除", command=confirm_delete).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="删除", command=confirm_delete, width=10, bg="#f44336", fg="white").pack(side=tk.LEFT,
+                                                                                                           padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
     # ------------------ 保存图片 + 标签（导入页，保存相对路径） ------------------
     def save_files(self):
@@ -564,7 +686,6 @@ class ImageManager(tk.Tk):
 
         for parent in dims:
             # 创建一个容器，包含 header 和 content，确保它们紧邻
-            # 为缩略图动态调整增加条件
             container = tk.Frame(self.left_inner)
             container.pack(fill="x", pady=(2, 2))
 
@@ -763,7 +884,7 @@ class ImageManager(tk.Tk):
                 continue
 
     def _on_canvas_resize(self):
-        """窗口大小改变时重新布局缩略图 改动缩略图"""
+        """窗口大小改变时重新布局缩略图"""
         if hasattr(self, 'search_results') and self.search_results:
             # 使用 after 避免频繁重绘
             if hasattr(self, '_resize_after_id'):
