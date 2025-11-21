@@ -116,9 +116,9 @@ class ImageManager(tk.Tk):
         self.selected_tags_by_dim = {}
 
         # 查看页相关属性：提前初始化，避免在导入页面刷新时访问未创建的 UI 引发 AttributeError
-        self.view_accordion_frames = {}      # parent -> {'header_btn': btn, 'content': frame, 'open': bool}
-        self.view_tag_vars = {}             # parent -> {tag: BooleanVar}
-        self.view_selected_tags_by_dim = {} # parent -> set(tag)
+        self.view_accordion_frames = {}  # parent -> {'header_btn': btn, 'content': frame, 'open': bool}
+        self.view_tag_vars = {}  # parent -> {tag: BooleanVar}
+        self.view_selected_tags_by_dim = {}  # parent -> set(tag)
         # UI 容器占位（实际在 setup_view_tab 创建）
         self.left_inner = None
         self.thumb_inner = None
@@ -182,13 +182,15 @@ class ImageManager(tk.Tk):
         left_frame.grid_rowconfigure(1, weight=1)
 
         # ----------------- 右侧（图片预览 + 操作） -----------------
-        preview_container = tk.Frame(right_frame, width=self.preview_size[0], height=self.preview_size[1], bd=1, relief="solid")
+        preview_container = tk.Frame(right_frame, width=self.preview_size[0], height=self.preview_size[1], bd=1,
+                                     relief="solid")
         preview_container.pack(pady=10)
         preview_container.pack_propagate(False)
         self.preview_label = tk.Label(preview_container, text="未选择图片", anchor="center")
         self.preview_label.pack(expand=True, fill="both")
 
-        tk.Label(right_frame, textvariable=self.preview_name_var, wraplength=320, anchor="w", justify="left").pack(pady=(6, 0), padx=6, fill="x")
+        tk.Label(right_frame, textvariable=self.preview_name_var, wraplength=320, anchor="w", justify="left").pack(
+            pady=(6, 0), padx=6, fill="x")
 
         op_frame = tk.Frame(right_frame)
         op_frame.pack(pady=12)
@@ -317,7 +319,7 @@ class ImageManager(tk.Tk):
             cursor.execute("SELECT tag_id FROM t_tags WHERE parent=?", (dim_name,))
             tag_ids = [r[0] for r in cursor.fetchall()]
             if tag_ids:
-                cursor.execute(f"DELETE FROM t_files_tags WHERE tag_id IN ({','.join(['?']*len(tag_ids))})", tag_ids)
+                cursor.execute(f"DELETE FROM t_files_tags WHERE tag_id IN ({','.join(['?'] * len(tag_ids))})", tag_ids)
             cursor.execute("DELETE FROM t_tags WHERE parent=?", (dim_name,))
             conn.commit()
             self.selected_tags_by_dim.pop(dim_name, None)
@@ -471,7 +473,8 @@ class ImageManager(tk.Tk):
         tk.Label(top_frame, text="搜索模式：").pack(side=tk.LEFT, padx=(2, 6))
         self.search_mode_var = tk.StringVar(value="OR")
         tk.Radiobutton(top_frame, text="OR（任一）", variable=self.search_mode_var, value="OR").pack(side=tk.LEFT, padx=4)
-        tk.Radiobutton(top_frame, text="AND（全部）", variable=self.search_mode_var, value="AND").pack(side=tk.LEFT, padx=4)
+        tk.Radiobutton(top_frame, text="AND（全部）", variable=self.search_mode_var, value="AND").pack(side=tk.LEFT,
+                                                                                                     padx=4)
 
         tk.Button(top_frame, text="搜索", command=self.search_images_by_selected).pack(side=tk.RIGHT, padx=6)
         tk.Button(top_frame, text="清除选择", command=self.clear_view_selections).pack(side=tk.RIGHT, padx=6)
@@ -560,42 +563,61 @@ class ImageManager(tk.Tk):
             return
 
         for parent in dims:
+            # 创建一个容器，包含 header 和 content，确保它们紧邻
+            container = tk.Frame(self.left_inner)
+            container.pack(fill="x", pady=(2, 2))
+
             # header (acts as toggle)
-            header = tk.Frame(self.left_inner)
-            header.pack(fill="x", pady=(2, 2))
-            btn = tk.Button(header, text=f"▸  {parent}", anchor="w", relief="flat")
+            header_frame = tk.Frame(container)
+            header_frame.pack(fill="x")
+            btn = tk.Button(header_frame, text=f"▸  {parent}", anchor="w", relief="flat", bg="#f0f0f0")
             btn.pack(fill="x")
 
             # content frame with checkboxes (initially hidden)
-            content = tk.Frame(self.left_inner, relief="groove", bd=0)
-            content.pack(fill="x", padx=8, pady=(0, 4))
-            content.pack_forget()  # hide initially
+            content = tk.Frame(container, relief="groove", bd=1, bg="#fafafa")
+            # 不在这里 pack，等待 toggle 时再 pack
 
             # build tag checkboxes
             tags = get_tags_by_dimension(parent)
             tag_vars = {}
             for idx, tag in enumerate(tags):
                 var = tk.BooleanVar(value=prev.get(parent, {}).get(tag, False))
-                cb = tk.Checkbutton(content, text=tag, variable=var,
+                cb = tk.Checkbutton(content, text=tag, variable=var, bg="#fafafa",
                                     command=lambda p=parent, t=tag, v=var: self._on_view_tag_toggle(p, t, v))
                 cb.grid(row=idx, column=0, sticky="w", padx=6, pady=2)
                 tag_vars[tag] = var
 
-            self.view_accordion_frames[parent] = {'header_btn': btn, 'content': content, 'open': False}
+            self.view_accordion_frames[parent] = {
+                'header_btn': btn,
+                'content': content,
+                'container': container,
+                'open': False
+            }
             self.view_tag_vars[parent] = tag_vars
 
-            # toggle action
+            # toggle action - 手风琴效果（互斥展开）
             def make_toggle(p=parent):
                 def toggle():
                     item = self.view_accordion_frames[p]
+
+                    # 如果当前面板是打开的，则关闭它
                     if item['open']:
                         item['content'].pack_forget()
                         item['header_btn'].config(text=f"▸  {p}")
                         item['open'] = False
                     else:
-                        item['content'].pack(fill="x", padx=8, pady=(0, 4))
+                        # 先关闭所有其他面板（手风琴互斥效果）
+                        for other_parent, other_item in self.view_accordion_frames.items():
+                            if other_item['open']:
+                                other_item['content'].pack_forget()
+                                other_item['header_btn'].config(text=f"▸  {other_parent}")
+                                other_item['open'] = False
+
+                        # 打开当前面板（紧跟在 header 下方）
+                        item['content'].pack(fill="x", padx=8, pady=(2, 4))
                         item['header_btn'].config(text=f"▾  {p}")
                         item['open'] = True
+
                 return toggle
 
             btn.config(command=make_toggle(parent))
@@ -728,7 +750,6 @@ class ImageManager(tk.Tk):
             lbl.pack()
         except Exception:
             messagebox.showerror("错误", "打开图片失败（文件可能不存在）")
-
 
     # ================================================================
     # 修改 download_zip，只下载被选中的图片
