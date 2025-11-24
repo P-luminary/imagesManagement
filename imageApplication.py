@@ -8,6 +8,7 @@ import shutil
 import zipfile
 import datetime
 
+
 # -------------------------
 # 初始化工程目录和数据库
 # -------------------------
@@ -23,6 +24,7 @@ def get_base_dir():
     else:
         # 开发环境
         return os.path.dirname(os.path.abspath(__file__))
+
 
 BASE_DIR = get_base_dir()
 FILES_DIR = os.path.join(BASE_DIR, "files")
@@ -196,13 +198,15 @@ class ImageManager(tk.Tk):
         left_frame.grid_rowconfigure(1, weight=1)
 
         # ----------------- 右侧（图片预览 + 操作） -----------------
-        preview_container = tk.Frame(right_frame, width=self.preview_size[0], height=self.preview_size[1], bd=1, relief="solid")
+        preview_container = tk.Frame(right_frame, width=self.preview_size[0], height=self.preview_size[1], bd=1,
+                                     relief="solid")
         preview_container.pack(pady=10)
         preview_container.pack_propagate(False)
         self.preview_label = tk.Label(preview_container, text="未选择图片", anchor="center")
         self.preview_label.pack(expand=True, fill="both")
 
-        tk.Label(right_frame, textvariable=self.preview_name_var, wraplength=320, anchor="w", justify="left").pack(pady=(6, 0), padx=6, fill="x")
+        tk.Label(right_frame, textvariable=self.preview_name_var, wraplength=320, anchor="w", justify="left").pack(
+            pady=(6, 0), padx=6, fill="x")
 
         op_frame = tk.Frame(right_frame)
         op_frame.pack(pady=12)
@@ -284,7 +288,7 @@ class ImageManager(tk.Tk):
     def add_dimension_window(self):
         win = tk.Toplevel(self)
         win.title("新增大维度")
-        win.geometry("400x200")
+        win.geometry("400x180")
         win.resizable(False, False)
         win.transient(self)  # 保持在主窗口上方
 
@@ -316,13 +320,6 @@ class ImageManager(tk.Tk):
         btn_frame.pack(pady=20)
         tk.Button(btn_frame, text="保存", command=save_dim, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
                                                                                                      padx=5)
-        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
-
-        # 绑定回车键
-        win.bind("<Return>", lambda e: save_dim())
-        btn_frame = tk.Frame(frame)
-        btn_frame.pack(pady=20)
-        tk.Button(btn_frame, text="保存", command=save_dim, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
         # 绑定回车键
@@ -372,7 +369,8 @@ class ImageManager(tk.Tk):
 
         btn_frame = tk.Frame(frame)
         btn_frame.pack(pady=20)
-        tk.Button(btn_frame, text="保存", command=save_edit, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="保存", command=save_edit, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                      padx=5)
         tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
         win.bind("<Return>", lambda e: save_edit())
@@ -435,7 +433,8 @@ class ImageManager(tk.Tk):
 
         btn_frame = tk.Frame(frame)
         btn_frame.pack(pady=20)
-        tk.Button(btn_frame, text="保存", command=save_tag, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="保存", command=save_tag, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                     padx=5)
         tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
         win.bind("<Return>", lambda e: save_tag())
@@ -497,7 +496,8 @@ class ImageManager(tk.Tk):
 
         btn_frame = tk.Frame(frame)
         btn_frame.pack(pady=20)
-        tk.Button(btn_frame, text="保存", command=save_edit_tag, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="保存", command=save_edit_tag, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                          padx=5)
         tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
         win.bind("<Return>", lambda e: save_edit_tag())
@@ -555,7 +555,8 @@ class ImageManager(tk.Tk):
 
         btn_frame = tk.Frame(frame)
         btn_frame.pack(pady=20)
-        tk.Button(btn_frame, text="删除", command=confirm_delete, width=10, bg="#f44336", fg="white").pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="删除", command=confirm_delete, width=10, bg="#f44336", fg="white").pack(side=tk.LEFT,
+                                                                                                           padx=5)
         tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
     # ------------------ 保存图片 + 标签（导入页，保存相对路径） ------------------
@@ -610,7 +611,8 @@ class ImageManager(tk.Tk):
         tk.Label(top_frame, text="搜索模式：").pack(side=tk.LEFT, padx=(2, 6))
         self.search_mode_var = tk.StringVar(value="OR")
         tk.Radiobutton(top_frame, text="OR（任一）", variable=self.search_mode_var, value="OR").pack(side=tk.LEFT, padx=4)
-        tk.Radiobutton(top_frame, text="AND（全部）", variable=self.search_mode_var, value="AND").pack(side=tk.LEFT, padx=4)
+        tk.Radiobutton(top_frame, text="AND（全部）", variable=self.search_mode_var, value="AND").pack(side=tk.LEFT,
+                                                                                                     padx=4)
 
         tk.Button(top_frame, text="搜索", command=self.search_images_by_selected).pack(side=tk.RIGHT, padx=6)
         tk.Button(top_frame, text="清除选择", command=self.clear_view_selections).pack(side=tk.RIGHT, padx=6)
@@ -640,6 +642,9 @@ class ImageManager(tk.Tk):
         self.left_canvas.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
 
+        # 绑定鼠标滚轮到左侧面板
+        self._bind_mousewheel(self.left_canvas)
+
         # right: thumbnails area (scrollable)
         right_panel = tk.Frame(main)
         right_panel.pack(side=tk.LEFT, fill="both", expand=True)
@@ -659,6 +664,9 @@ class ImageManager(tk.Tk):
         self.thumb_canvas.pack(side="left", fill="both", expand=True)
         self.thumb_vsb.pack(side="right", fill="y")
 
+        # 绑定鼠标滚轮到缩略图面板
+        self._bind_mousewheel(self.thumb_canvas)
+
         # download button below
         bottom_frame = tk.Frame(self.tab_view)
         bottom_frame.pack(fill="x", pady=(4, 8))
@@ -669,6 +677,22 @@ class ImageManager(tk.Tk):
 
         # search results list (absolute paths)
         self.search_results = []
+
+    def _bind_mousewheel(self, canvas):
+        """绑定鼠标滚轮到画布"""
+
+        def on_mousewheel(event):
+            # Windows 和 Linux
+            if event.num == 4 or event.delta > 0:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5 or event.delta < 0:
+                canvas.yview_scroll(1, "units")
+
+        # Windows/MacOS
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        # Linux
+        canvas.bind_all("<Button-4>", on_mousewheel)
+        canvas.bind_all("<Button-5>", on_mousewheel)
 
     def refresh_view_tags(self):
         """
@@ -753,6 +777,7 @@ class ImageManager(tk.Tk):
                         item['content'].pack(fill="x", padx=8, pady=(2, 4))
                         item['header_btn'].config(text=f"▾  {p}")
                         item['open'] = True
+
                 return toggle
 
             btn.config(command=make_toggle(parent))
@@ -890,9 +915,29 @@ class ImageManager(tk.Tk):
                 # 文件名过长时截断显示
                 display_name = filename if len(filename) <= 20 else filename[:17] + "..."
                 chk = tk.Checkbutton(frame, text=display_name, variable=var,
-                                    anchor="w", justify="left", bg="white", wraplength=110)
+                                     anchor="w", justify="left", bg="white", wraplength=110)
                 chk.pack(fill="x", padx=2)
                 self.thumb_selected_vars[path] = var
+
+                # 显示该图片的标签信息
+                tags_info = self._get_image_tags(path)
+                if tags_info:
+                    tags_frame = tk.Frame(frame, bg="white")
+                    tags_frame.pack(fill="x", padx=2, pady=(2, 2))
+
+                    for tag_text in tags_info[:3]:  # 最多显示3个标签
+                        tag_label = tk.Label(tags_frame, text=tag_text,
+                                             bg="#e3f2fd", fg="#1976d2",
+                                             font=("Arial", 7),
+                                             padx=3, pady=1, relief="solid", bd=1)
+                        tag_label.pack(side=tk.LEFT, padx=1)
+
+                    if len(tags_info) > 3:
+                        more_label = tk.Label(tags_frame, text=f"+{len(tags_info) - 3}",
+                                              bg="#f5f5f5", fg="#666",
+                                              font=("Arial", 7),
+                                              padx=2, pady=1)
+                        more_label.pack(side=tk.LEFT, padx=1)
             except Exception:
                 continue
 
@@ -903,6 +948,38 @@ class ImageManager(tk.Tk):
             if hasattr(self, '_resize_after_id'):
                 self.after_cancel(self._resize_after_id)
             self._resize_after_id = self.after(200, self._render_thumbnails)
+
+    def _get_image_tags(self, abs_path):
+        """
+        获取指定图片的所有标签
+        返回格式: ["维度:标签", "维度:标签", ...]
+        """
+        try:
+            # 从绝对路径转换回相对路径（用于数据库查询）
+            rel_path = os.path.relpath(abs_path, BASE_DIR)
+
+            # 查询该文件的 file_id
+            cursor.execute("SELECT file_id FROM t_files WHERE file_path=?", (rel_path,))
+            row = cursor.fetchone()
+            if not row:
+                return []
+
+            file_id = row[0]
+
+            # 查询该文件的所有标签
+            sql = """
+                SELECT t.parent, t.name
+                FROM t_tags t
+                JOIN t_files_tags ft ON t.tag_id = ft.tag_id
+                WHERE ft.file_id = ?
+                ORDER BY t.parent, t.name
+            """
+            cursor.execute(sql, (file_id,))
+            tags = cursor.fetchall()
+
+            return [f"{parent}:{name}" for parent, name in tags if name]
+        except Exception:
+            return []
 
     def show_full_image(self, path):
         abs_p = resolve_path(path) if not os.path.isabs(path) else path
