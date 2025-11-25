@@ -1,4 +1,5 @@
 import os
+import sys
 import sqlite3
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -7,10 +8,25 @@ import shutil
 import zipfile
 import datetime
 
+
 # -------------------------
 # 初始化工程目录和数据库
 # -------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def get_base_dir():
+    """
+    获取程序运行的基础目录
+    - 开发环境：脚本所在目录
+    - 打包后的 exe：exe 文件所在目录
+    """
+    if getattr(sys, 'frozen', False):
+        # 打包后的 exe 环境
+        return os.path.dirname(sys.executable)
+    else:
+        # 开发环境
+        return os.path.dirname(os.path.abspath(__file__))
+
+
+BASE_DIR = get_base_dir()
 FILES_DIR = os.path.join(BASE_DIR, "files")
 DB_PATH = os.path.join(BASE_DIR, "images.db")
 
@@ -63,7 +79,7 @@ def get_all_dimensions():
 def get_tags_by_dimension(parent):
     cursor.execute("SELECT name FROM t_tags WHERE parent=?", (parent,))
     rows = cursor.fetchall()
-    return sorted([r[0] for r in rows if r[0].strip() != ""])
+    return sorted([r[0] for r in rows if r[0] and r[0].strip() != ""])
 
 
 def insert_dimension(parent):
@@ -76,6 +92,8 @@ def insert_dimension(parent):
 
 
 def insert_tag(parent, tag_name):
+    if not parent or not tag_name:
+        return
     cursor.execute("SELECT * FROM t_tags WHERE parent=? AND name=?", (parent, tag_name))
     if not cursor.fetchone():
         cursor.execute("INSERT INTO t_tags (parent, name) VALUES (?, ?)", (parent, tag_name))
@@ -100,7 +118,7 @@ def resolve_path(db_path_value):
 
 
 # ================================================================
-#                      GUI 主界面（左右布局）
+#                      GUI 主界面（左右布局 + 折叠查看面板）
 # ================================================================
 class ImageManager(tk.Tk):
     def __init__(self):
@@ -108,15 +126,25 @@ class ImageManager(tk.Tk):
         self.title("图片管理系统")
         self.geometry("1000x720")
 
+        # 导入相关
         self.selected_files = []
-        # 记忆每个维度被勾选的子标签集合 {parent: set(tag1, tag2)}
+        # 记忆每个维度被勾选的子标签集合（导入页） {parent: set(tag1, tag2)}
         self.selected_tags_by_dim = {}
+
+        # 查看页相关属性：提前初始化，避免在导入页面刷新时访问未创建的 UI 引发 AttributeError
+        self.view_accordion_frames = {}  # parent -> {'header_btn': btn, 'content': frame, 'open': bool}
+        self.view_tag_vars = {}  # parent -> {tag: BooleanVar}
+        self.view_selected_tags_by_dim = {}  # parent -> set(tag)
+        # UI 容器占位（实际在 setup_view_tab 创建）
+        self.left_inner = None
+        self.thumb_inner = None
 
         # 预览设置
         self.preview_size = (300, 300)
         self.preview_photo = None  # 保持引用防止被 GC
+        self.preview_name_var = tk.StringVar(value="")
 
-        # 使用 Notebook（保持导入/查看两个 tab）
+        # 使用 Notebook（导入 / 查看）
         self.tab_control = ttk.Notebook(self)
         self.tab_import = ttk.Frame(self.tab_control)
         self.tab_view = ttk.Frame(self.tab_control)
@@ -124,15 +152,15 @@ class ImageManager(tk.Tk):
         self.tab_control.add(self.tab_view, text="查看图片")
         self.tab_control.pack(expand=1, fill="both")
 
-        # 初始化 Tab 内容
-        self.setup_import_tab()
+        # 注意：先创建查看页的控件（保证 left_inner/thumb_inner 存在），然后再创建导入页
+        # 这样即便导入页 refresh 调用 view 刷新也不会出现未创建属性的访问
         self.setup_view_tab()
+        self.setup_import_tab()
 
     # ================================================================
     #                      导入图片 TAB（左右布局）
     # ================================================================
     def setup_import_tab(self):
-        # 使用左右两个 frame：left_frame（维度/标签管理）、right_frame（预览与操作）
         container = tk.Frame(self.tab_import)
         container.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -144,55 +172,48 @@ class ImageManager(tk.Tk):
         right_frame.pack_propagate(False)
 
         # ----------------- 左侧（维度 + 子标签 管理） -----------------
-        # 大维度列表与操作
         tk.Label(left_frame, text="大维度列表：").grid(row=0, column=0, sticky="w")
         self.dim_listbox = tk.Listbox(left_frame, height=18, exportselection=False)
         self.dim_listbox.grid(row=1, column=0, rowspan=10, sticky="nwes", padx=(0, 10))
         self.dim_listbox.bind("<<ListboxSelect>>", self.update_tag_checkboxes)
 
-        # 维度按钮
         btn_dim_frame = tk.Frame(left_frame)
         btn_dim_frame.grid(row=11, column=0, pady=6, sticky="w")
         tk.Button(btn_dim_frame, text="新增大维度", command=self.add_dimension_window).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_dim_frame, text="编辑大维度", command=self.edit_dimension_window).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_dim_frame, text="删除大维度", command=self.delete_dimension).pack(side=tk.LEFT, padx=4)
 
-        # 子标签区
         tk.Label(left_frame, text="子标签（多选）:").grid(row=0, column=1, sticky="w")
         self.tag_check_frame = tk.Frame(left_frame)
         self.tag_check_frame.grid(row=1, column=1, rowspan=10, sticky="nw")
 
-        # 子标签按钮
         btn_tag_frame = tk.Frame(left_frame)
         btn_tag_frame.grid(row=11, column=1, pady=6, sticky="w")
         tk.Button(btn_tag_frame, text="新增子标签", command=self.add_tag_window).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_tag_frame, text="编辑子标签", command=self.edit_tag_window).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_tag_frame, text="删除子标签", command=self.delete_tag).pack(side=tk.LEFT, padx=4)
 
-        # make left_frame grid expand properly
         left_frame.grid_columnconfigure(0, weight=0)
         left_frame.grid_columnconfigure(1, weight=1)
         left_frame.grid_rowconfigure(1, weight=1)
 
         # ----------------- 右侧（图片预览 + 操作） -----------------
-        # 预览区域（固定大小）
-        preview_container = tk.Frame(right_frame, width=self.preview_size[0], height=self.preview_size[1], bd=1, relief="solid")
+        preview_container = tk.Frame(right_frame, width=self.preview_size[0], height=self.preview_size[1], bd=1,
+                                     relief="solid")
         preview_container.pack(pady=10)
-        preview_container.pack_propagate(False)  # 保持固定大小
+        preview_container.pack_propagate(False)
         self.preview_label = tk.Label(preview_container, text="未选择图片", anchor="center")
         self.preview_label.pack(expand=True, fill="both")
 
-        # 图片信息显示（文件名）
-        self.preview_name_var = tk.StringVar(value="")
-        tk.Label(right_frame, textvariable=self.preview_name_var, wraplength=320, anchor="w", justify="left").pack(pady=(6, 0), padx=6, fill="x")
+        tk.Label(right_frame, textvariable=self.preview_name_var, wraplength=320, anchor="w", justify="left").pack(
+            pady=(6, 0), padx=6, fill="x")
 
-        # 右侧操作按钮
         op_frame = tk.Frame(right_frame)
         op_frame.pack(pady=12)
         tk.Button(op_frame, text="选择图片", command=self.select_files).pack(side=tk.LEFT, padx=6)
         tk.Button(op_frame, text="保存图片和标签", command=self.save_files).pack(side=tk.LEFT, padx=6)
 
-        # refresh dims into listbox
+        # refresh dims (safe: refresh_view_tags checks left_inner existence)
         self.refresh_dimension_list()
 
     # ------------------ 选择图片 ------------------
@@ -202,19 +223,15 @@ class ImageManager(tk.Tk):
             filetypes=[("图片文件", "*.jpg *.png *.jpeg *.bmp")])
         if files:
             self.selected_files = files
-            # 展示第一张（要求）
             first = files[0]
             self.show_preview(first)
-            # 显示文件名
             self.preview_name_var.set(os.path.basename(first))
-            messagebox.showinfo("提示", f"已选择 {len(files)} 张图片")
+            messagebox.showinfo("提示", f"已选择 {len(files)} 张图片（仅预览第一张）")
 
     def show_preview(self, image_path):
-        """在固定预览区显示图片，按比例缩放到 preview_size"""
         try:
             img = Image.open(image_path)
-            img.thumbnail(self.preview_size)  # 等比缩放到框内
-            # create a background image with desired size and paste centered (to keep consistent frame)
+            img.thumbnail(self.preview_size)
             bg = Image.new("RGBA", self.preview_size, (240, 240, 240, 255))
             w, h = img.size
             x = (self.preview_size[0] - w) // 2
@@ -223,7 +240,6 @@ class ImageManager(tk.Tk):
             self.preview_photo = ImageTk.PhotoImage(bg)
             self.preview_label.config(image=self.preview_photo, text="")
         except Exception:
-            # 回退到文本提示
             self.preview_label.config(image="", text="无法打开图片")
             self.preview_name_var.set("")
 
@@ -232,10 +248,11 @@ class ImageManager(tk.Tk):
         self.dim_listbox.delete(0, tk.END)
         for dim in get_all_dimensions():
             self.dim_listbox.insert(tk.END, dim)
-        # 更新右侧勾选面板（保持记忆）
         self.update_tag_checkboxes(None)
+        # refresh view tags (safe: function checks existence of left_inner)
+        self.refresh_view_tags()
 
-    # ------------------ 更新子标签勾选状态 ------------------
+    # ------------------ 更新子标签勾选状态（导入页） ------------------
     def update_tag_checkboxes(self, event):
         for w in self.tag_check_frame.winfo_children():
             w.destroy()
@@ -267,13 +284,28 @@ class ImageManager(tk.Tk):
         else:
             self.selected_tags_by_dim[parent].discard(tag)
 
-    # ------------------ 新增大维度 ------------------
+    # ------------------ 新增/编辑/删除 维度/子标签（导入页操作会刷新查看页标签） ------------------
     def add_dimension_window(self):
         win = tk.Toplevel(self)
         win.title("新增大维度")
-        tk.Label(win, text="维度名称:").pack(pady=5)
+        win.geometry("400x180")
+        win.resizable(False, False)
+        win.transient(self)  # 保持在主窗口上方
+
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 180) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text="维度名称:", font=("Arial", 10)).pack(pady=(10, 5))
         dim_var = tk.StringVar()
-        tk.Entry(win, textvariable=dim_var).pack(pady=5)
+        entry = tk.Entry(frame, textvariable=dim_var, width=30, font=("Arial", 10))
+        entry.pack(pady=5)
+        entry.focus_set()
 
         def save_dim():
             val = dim_var.get().strip()
@@ -281,10 +313,18 @@ class ImageManager(tk.Tk):
                 insert_dimension(val)
                 self.refresh_dimension_list()
                 win.destroy()
+            else:
+                messagebox.showwarning("警告", "请输入维度名称", parent=win)
 
-        tk.Button(win, text="保存", command=save_dim).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="保存", command=save_dim, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                     padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
-    # ------------------ 编辑大维度 ------------------
+        # 绑定回车键
+        win.bind("<Return>", lambda e: save_dim())
+
     def edit_dimension_window(self):
         selection = self.dim_listbox.curselection()
         if not selection:
@@ -293,25 +333,48 @@ class ImageManager(tk.Tk):
         old_name = self.dim_listbox.get(selection[0])
         win = tk.Toplevel(self)
         win.title("编辑大维度")
+        win.geometry("400x200")
+        win.resizable(False, False)
+        win.transient(self)
 
-        tk.Label(win, text="修改维度名称:").pack(pady=5)
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 200) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=f"原维度名称: {old_name}", font=("Arial", 9), fg="gray").pack(pady=(5, 10))
+        tk.Label(frame, text="修改为:", font=("Arial", 10)).pack(pady=5)
         dim_var = tk.StringVar(value=old_name)
-        tk.Entry(win, textvariable=dim_var).pack(pady=5)
+        entry = tk.Entry(frame, textvariable=dim_var, width=30, font=("Arial", 10))
+        entry.pack(pady=5)
+        entry.focus_set()
+        entry.select_range(0, tk.END)
 
         def save_edit():
             new_name = dim_var.get().strip()
-            if new_name and new_name != old_name:
+            if not new_name:
+                messagebox.showwarning("警告", "请输入维度名称", parent=win)
+                return
+            if new_name != old_name:
                 cursor.execute("UPDATE t_tags SET parent=? WHERE parent=?", (new_name, old_name))
                 conn.commit()
-                # 更新记忆状态
                 if old_name in self.selected_tags_by_dim:
                     self.selected_tags_by_dim[new_name] = self.selected_tags_by_dim.pop(old_name)
                 self.refresh_dimension_list()
-                win.destroy()
+            win.destroy()
 
-        tk.Button(win, text="保存", command=save_edit).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="保存", command=save_edit, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                      padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
-    # ------------------ 删除大维度 ------------------
+        win.bind("<Return>", lambda e: save_edit())
+
     def delete_dimension(self):
         selection = self.dim_listbox.curselection()
         if not selection:
@@ -322,13 +385,12 @@ class ImageManager(tk.Tk):
             cursor.execute("SELECT tag_id FROM t_tags WHERE parent=?", (dim_name,))
             tag_ids = [r[0] for r in cursor.fetchall()]
             if tag_ids:
-                cursor.execute(f"DELETE FROM t_files_tags WHERE tag_id IN ({','.join(['?']*len(tag_ids))})", tag_ids)
+                cursor.execute(f"DELETE FROM t_files_tags WHERE tag_id IN ({','.join(['?'] * len(tag_ids))})", tag_ids)
             cursor.execute("DELETE FROM t_tags WHERE parent=?", (dim_name,))
             conn.commit()
             self.selected_tags_by_dim.pop(dim_name, None)
             self.refresh_dimension_list()
 
-    # ------------------ 新增子标签 ------------------
     def add_tag_window(self):
         selection = self.dim_listbox.curselection()
         if not selection:
@@ -337,24 +399,46 @@ class ImageManager(tk.Tk):
         parent = self.dim_listbox.get(selection[0])
         win = tk.Toplevel(self)
         win.title("新增子标签")
-        tk.Label(win, text=f"维度：{parent}").pack(pady=5)
-        tk.Label(win, text="子标签名称:").pack(pady=5)
+        win.geometry("400x220")
+        win.resizable(False, False)
+        win.transient(self)
+
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 220) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=f"所属维度: {parent}", font=("Arial", 10, "bold"), fg="#1976D2").pack(pady=(5, 15))
+        tk.Label(frame, text="子标签名称:", font=("Arial", 10)).pack(pady=5)
         tag_var = tk.StringVar()
-        tk.Entry(win, textvariable=tag_var).pack()
+        entry = tk.Entry(frame, textvariable=tag_var, width=30, font=("Arial", 10))
+        entry.pack(pady=5)
+        entry.focus_set()
 
         def save_tag():
             name = tag_var.get().strip()
             if name:
                 insert_tag(parent, name)
-                # 初始化记忆为未选中
                 self.selected_tags_by_dim.setdefault(parent, set())
                 self.selected_tags_by_dim[parent].discard(name)
                 self.update_tag_checkboxes(None)
+                self.refresh_view_tags()
                 win.destroy()
+            else:
+                messagebox.showwarning("警告", "请输入子标签名称", parent=win)
 
-        tk.Button(win, text="保存", command=save_tag).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="保存", command=save_tag, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                     padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
-    # ------------------ 编辑子标签 ------------------
+        win.bind("<Return>", lambda e: save_tag())
+
     def edit_tag_window(self):
         selection = self.dim_listbox.curselection()
         if not selection:
@@ -367,29 +451,57 @@ class ImageManager(tk.Tk):
             return
         win = tk.Toplevel(self)
         win.title("编辑子标签")
-        tk.Label(win, text=f"维度：{parent}").pack(pady=5)
-        tk.Label(win, text="选择子标签:").pack(pady=5)
+        win.geometry("420x280")
+        win.resizable(False, False)
+        win.transient(self)
+
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 420) // 2
+        y = self.winfo_y() + (self.winfo_height() - 280) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=f"所属维度: {parent}", font=("Arial", 10, "bold"), fg="#1976D2").pack(pady=(5, 15))
+
+        tk.Label(frame, text="选择要编辑的子标签:", font=("Arial", 10)).pack(pady=5)
         tag_var = tk.StringVar(value=tags[0])
-        tk.OptionMenu(win, tag_var, *tags).pack(pady=5)
-        tk.Label(win, text="修改为:").pack(pady=5)
+        option_menu = tk.OptionMenu(frame, tag_var, *tags)
+        option_menu.config(width=25)
+        option_menu.pack(pady=5)
+
+        tk.Label(frame, text="修改为:", font=("Arial", 10)).pack(pady=(15, 5))
         new_var = tk.StringVar()
-        tk.Entry(win, textvariable=new_var).pack(pady=5)
+        entry = tk.Entry(frame, textvariable=new_var, width=30, font=("Arial", 10))
+        entry.pack(pady=5)
+        entry.focus_set()
 
         def save_edit_tag():
             old_name = tag_var.get()
             new_name = new_var.get().strip()
-            if new_name and new_name != old_name:
+            if not new_name:
+                messagebox.showwarning("警告", "请输入新标签名称", parent=win)
+                return
+            if new_name != old_name:
                 cursor.execute("UPDATE t_tags SET name=? WHERE parent=? AND name=?", (new_name, parent, old_name))
                 conn.commit()
                 if parent in self.selected_tags_by_dim and old_name in self.selected_tags_by_dim[parent]:
                     self.selected_tags_by_dim[parent].remove(old_name)
                     self.selected_tags_by_dim[parent].add(new_name)
                 self.update_tag_checkboxes(None)
-                win.destroy()
+                self.refresh_view_tags()
+            win.destroy()
 
-        tk.Button(win, text="保存", command=save_edit_tag).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="保存", command=save_edit_tag, width=10, bg="#4CAF50", fg="white").pack(side=tk.LEFT,
+                                                                                                          padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
-    # ------------------ 删除子标签 ------------------
+        win.bind("<Return>", lambda e: save_edit_tag())
+
     def delete_tag(self):
         selection = self.dim_listbox.curselection()
         if not selection:
@@ -402,14 +514,32 @@ class ImageManager(tk.Tk):
             return
         win = tk.Toplevel(self)
         win.title("删除子标签")
-        tk.Label(win, text=f"维度：{parent}").pack(pady=5)
-        tk.Label(win, text="选择子标签:").pack(pady=5)
+        win.geometry("400x240")
+        win.resizable(False, False)
+        win.transient(self)
+
+        # 居中显示
+        win.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 240) // 2
+        win.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(win, padx=20, pady=20)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=f"所属维度: {parent}", font=("Arial", 10, "bold"), fg="#1976D2").pack(pady=(5, 15))
+
+        tk.Label(frame, text="选择要删除的子标签:", font=("Arial", 10)).pack(pady=5)
         tag_var = tk.StringVar(value=tags[0])
-        tk.OptionMenu(win, tag_var, *tags).pack(pady=5)
+        option_menu = tk.OptionMenu(frame, tag_var, *tags)
+        option_menu.config(width=25)
+        option_menu.pack(pady=10)
+
+        tk.Label(frame, text="⚠️ 删除后无法恢复", font=("Arial", 9), fg="red").pack(pady=5)
 
         def confirm_delete():
             tname = tag_var.get()
-            if tname and messagebox.askyesno("确认", f"确定删除子标签【{tname}】吗？"):
+            if tname and messagebox.askyesno("确认删除", f"确定删除子标签【{tname}】吗？\n此操作无法撤销！", parent=win):
                 cursor.execute("SELECT tag_id FROM t_tags WHERE parent=? AND name=?", (parent, tname))
                 r = cursor.fetchone()
                 if r:
@@ -420,11 +550,16 @@ class ImageManager(tk.Tk):
                     if parent in self.selected_tags_by_dim:
                         self.selected_tags_by_dim[parent].discard(tname)
                 self.update_tag_checkboxes(None)
+                self.refresh_view_tags()
                 win.destroy()
 
-        tk.Button(win, text="删除", command=confirm_delete).pack(pady=10)
+        btn_frame = tk.Frame(frame)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="删除", command=confirm_delete, width=10, bg="#f44336", fg="white").pack(side=tk.LEFT,
+                                                                                                           padx=5)
+        tk.Button(btn_frame, text="取消", command=win.destroy, width=10).pack(side=tk.LEFT, padx=5)
 
-    # ------------------ 保存图片 + 标签（改为保存相对路径） ------------------
+    # ------------------ 保存图片 + 标签（导入页，保存相对路径） ------------------
     def save_files(self):
         if not self.selected_files:
             messagebox.showwarning("警告", "请先选择图片")
@@ -443,11 +578,9 @@ class ImageManager(tk.Tk):
             timestamp = datetime.datetime.now().timestamp()
             new_filename = f"{timestamp}_{file_name}"
             dest_abs = os.path.join(FILES_DIR, new_filename)
-            # copy file to project files folder (absolute path)
             shutil.copy(f, dest_abs)
 
-            # store relative path in DB so project can move across machines
-            rel_path = os.path.relpath(dest_abs, BASE_DIR)  # like 'files/xxx.jpg'
+            rel_path = os.path.relpath(dest_abs, BASE_DIR)
             cursor.execute("INSERT INTO t_files (file_name, file_path) VALUES (?, ?)", (file_name, rel_path))
             file_id = cursor.lastrowid
 
@@ -461,96 +594,273 @@ class ImageManager(tk.Tk):
         conn.commit()
         messagebox.showinfo("成功", "图片和标签保存成功！")
         self.selected_files = []
-        # 保存完清空勾选状态
         self.selected_tags_by_dim = {}
         self.update_tag_checkboxes(None)
-        # 清除预览显示（保留占位）
         self.preview_label.config(image="", text="未选择图片")
         self.preview_photo = None
         self.preview_name_var.set("")
 
     # ================================================================
-    #                      查看图片 TAB（多标签 AND/OR 搜索）
+    #                      查看图片 TAB（折叠维度面板 + AND/OR）
     # ================================================================
     def setup_view_tab(self):
+        # top controls: mode + buttons
         top_frame = tk.Frame(self.tab_view)
-        top_frame.pack(fill="x", pady=6)
+        top_frame.pack(fill="x", pady=6, padx=6)
 
-        tk.Label(top_frame, text="输入子标签（逗号或空格分隔）:").pack(side=tk.LEFT, padx=(6, 4))
-        self.search_var = tk.StringVar()
-        tk.Entry(top_frame, textvariable=self.search_var, width=40).pack(side=tk.LEFT, padx=(0, 6))
-
-        # AND / OR 模式选择
-        self.search_mode_var = tk.StringVar(value="OR")  # 默认 OR
+        tk.Label(top_frame, text="搜索模式：").pack(side=tk.LEFT, padx=(2, 6))
+        self.search_mode_var = tk.StringVar(value="OR")
         tk.Radiobutton(top_frame, text="OR（任一）", variable=self.search_mode_var, value="OR").pack(side=tk.LEFT, padx=4)
-        tk.Radiobutton(top_frame, text="AND（全部）", variable=self.search_mode_var, value="AND").pack(side=tk.LEFT, padx=4)
+        tk.Radiobutton(top_frame, text="AND（全部）", variable=self.search_mode_var, value="AND").pack(side=tk.LEFT,
+                                                                                                     padx=4)
 
-        tk.Button(top_frame, text="搜索", command=self.search_images).pack(side=tk.LEFT, padx=6)
+        tk.Button(top_frame, text="搜索", command=self.search_images_by_selected).pack(side=tk.RIGHT, padx=6)
+        tk.Button(top_frame, text="清除选择", command=self.clear_view_selections).pack(side=tk.RIGHT, padx=6)
 
-        # 结果区（图片缩略图）
-        self.image_frame = tk.Frame(self.tab_view)
-        self.image_frame.pack(fill="both", expand=True, padx=6, pady=6)
+        # main view area: left accordion tags, right thumbnails
+        main = tk.Frame(self.tab_view)
+        main.pack(fill="both", expand=True, padx=6, pady=6)
 
-        # 下载按钮
-        btn_frame = tk.Frame(self.tab_view)
-        btn_frame.pack(fill="x", pady=(0, 8))
-        tk.Button(btn_frame, text="下载压缩包", command=self.download_zip).pack(side=tk.RIGHT, padx=10)
+        # left: accordion for dimensions & tags (scrollable)
+        left_panel = tk.Frame(main, width=320)
+        left_panel.pack(side=tk.LEFT, fill="y")
+        left_panel.pack_propagate(False)
 
+        # add a canvas + scrollbar to left_panel to support many dims
+        self.left_canvas = tk.Canvas(left_panel, borderwidth=0)
+        vsb = tk.Scrollbar(left_panel, orient="vertical", command=self.left_canvas.yview)
+        # left_inner is the frame that will hold accordion content
+        self.left_inner = tk.Frame(self.left_canvas)
+
+        self.left_inner.bind(
+            "<Configure>",
+            lambda e: self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+        )
+        self.left_canvas.create_window((0, 0), window=self.left_inner, anchor="nw")
+        self.left_canvas.configure(yscrollcommand=vsb.set)
+
+        self.left_canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        # 绑定鼠标滚轮到左侧面板
+        self._bind_mousewheel(self.left_canvas)
+
+        # right: thumbnails area (scrollable)
+        right_panel = tk.Frame(main)
+        right_panel.pack(side=tk.LEFT, fill="both", expand=True)
+
+        # thumbnail canvas with scrollbar
+        self.thumb_canvas = tk.Canvas(right_panel)
+        self.thumb_vsb = tk.Scrollbar(right_panel, orient="vertical", command=self.thumb_canvas.yview)
+        self.thumb_inner = tk.Frame(self.thumb_canvas)
+
+        self.thumb_inner.bind(
+            "<Configure>",
+            lambda e: self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
+        )
+        self.thumb_canvas.create_window((0, 0), window=self.thumb_inner, anchor="nw")
+        self.thumb_canvas.configure(yscrollcommand=self.thumb_vsb.set)
+
+        self.thumb_canvas.pack(side="left", fill="both", expand=True)
+        self.thumb_vsb.pack(side="right", fill="y")
+
+        # 绑定鼠标滚轮到缩略图面板
+        self._bind_mousewheel(self.thumb_canvas)
+
+        # download button below
+        bottom_frame = tk.Frame(self.tab_view)
+        bottom_frame.pack(fill="x", pady=(4, 8))
+        tk.Button(bottom_frame, text="下载选中结果为ZIP", command=self.download_zip).pack(side=tk.RIGHT, padx=10)
+
+        # initial build of accordion
+        self.refresh_view_tags()
+
+        # search results list (absolute paths)
         self.search_results = []
 
-    def search_images(self):
-        """支持多标签搜索，AND / OR 两种模式"""
-        # 清空显示区
-        for w in self.image_frame.winfo_children():
+    def _bind_mousewheel(self, canvas):
+        """绑定鼠标滚轮到画布（仅在鼠标悬停时响应）"""
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def on_mousewheel_linux_up(event):
+            canvas.yview_scroll(-1, "units")
+
+        def on_mousewheel_linux_down(event):
+            canvas.yview_scroll(1, "units")
+
+        def bind_wheel(event):
+            # 鼠标进入时绑定滚轮事件
+            canvas.bind_all("<MouseWheel>", on_mousewheel)
+            canvas.bind_all("<Button-4>", on_mousewheel_linux_up)
+            canvas.bind_all("<Button-5>", on_mousewheel_linux_down)
+
+        def unbind_wheel(event):
+            # 鼠标离开时解绑滚轮事件
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        canvas.bind("<Enter>", bind_wheel)
+        canvas.bind("<Leave>", unbind_wheel)
+
+    def refresh_view_tags(self):
+        """
+        (Re)build the accordion left panel based on current t_tags.
+        Keeps previous checked state when possible.
+
+        This function is safe to call even before the view UI is constructed:
+        - if left_inner is None (view not initialized), just return early.
+        """
+        # If view panel not yet created, skip
+        if self.left_inner is None:
+            return
+
+        # save previous selected states
+        prev = {}
+        for parent, tagmap in self.view_tag_vars.items():
+            prev[parent] = {t: v.get() for t, v in tagmap.items()}
+
+        # clear existing widgets
+        for w in self.left_inner.winfo_children():
             w.destroy()
+        self.view_accordion_frames.clear()
+        self.view_tag_vars.clear()
 
-        raw = self.search_var.get().strip()
-        if not raw:
-            messagebox.showwarning("警告", "请输入至少一个子标签")
+        dims = get_all_dimensions()
+        if not dims:
+            tk.Label(self.left_inner, text="暂无维度/标签，先到导入页新增标签").pack(anchor="w", padx=6, pady=6)
             return
 
-        # 解析标签名（逗号或空格分隔）
-        parts = [p.strip() for p in raw.replace(",", " ").split() if p.strip()]
-        if not parts:
-            messagebox.showwarning("警告", "请输入有效的标签名称")
+        for parent in dims:
+            # 创建一个容器，包含 header 和 content，确保它们紧邻
+            container = tk.Frame(self.left_inner)
+            container.pack(fill="x", pady=(2, 2))
+
+            # header (acts as toggle)
+            header_frame = tk.Frame(container)
+            header_frame.pack(fill="x")
+            btn = tk.Button(header_frame, text=f"▸  {parent}", anchor="w", relief="flat", bg="#f0f0f0")
+            btn.pack(fill="x")
+
+            # content frame with checkboxes (initially hidden)
+            content = tk.Frame(container, relief="groove", bd=1, bg="#fafafa")
+            # 不在这里 pack，等待 toggle 时再 pack
+
+            # build tag checkboxes
+            tags = get_tags_by_dimension(parent)
+            tag_vars = {}
+            for idx, tag in enumerate(tags):
+                var = tk.BooleanVar(value=prev.get(parent, {}).get(tag, False))
+                cb = tk.Checkbutton(content, text=tag, variable=var, bg="#fafafa",
+                                    command=lambda p=parent, t=tag, v=var: self._on_view_tag_toggle(p, t, v))
+                cb.grid(row=idx, column=0, sticky="w", padx=6, pady=2)
+                tag_vars[tag] = var
+
+            self.view_accordion_frames[parent] = {
+                'header_btn': btn,
+                'content': content,
+                'container': container,
+                'open': False
+            }
+            self.view_tag_vars[parent] = tag_vars
+
+            # toggle action - 手风琴效果（互斥展开）
+            def make_toggle(p=parent):
+                def toggle():
+                    item = self.view_accordion_frames[p]
+
+                    # 如果当前面板是打开的，则关闭它
+                    if item['open']:
+                        item['content'].pack_forget()
+                        item['header_btn'].config(text=f"▸  {p}")
+                        item['open'] = False
+                    else:
+                        # 先关闭所有其他面板（手风琴互斥效果）
+                        for other_parent, other_item in self.view_accordion_frames.items():
+                            if other_item['open']:
+                                other_item['content'].pack_forget()
+                                other_item['header_btn'].config(text=f"▸  {other_parent}")
+                                other_item['open'] = False
+
+                        # 打开当前面板（紧跟在 header 下方）
+                        item['content'].pack(fill="x", padx=8, pady=(2, 4))
+                        item['header_btn'].config(text=f"▾  {p}")
+                        item['open'] = True
+
+                    # 更新滚动区域（展开/折叠后高度变化）
+                    self.left_inner.update_idletasks()
+                    self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+
+                return toggle
+
+            btn.config(command=make_toggle(parent))
+
+        # rebuild view_selected_tags_by_dim
+        self.view_selected_tags_by_dim = {}
+        for parent, tagmap in self.view_tag_vars.items():
+            self.view_selected_tags_by_dim[parent] = set(t for t, v in tagmap.items() if v.get())
+
+        # 更新左侧滚动区域
+        self.left_inner.update_idletasks()
+        self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+
+    def _on_view_tag_toggle(self, parent, tag, var):
+        if var.get():
+            self.view_selected_tags_by_dim.setdefault(parent, set()).add(tag)
+        else:
+            if parent in self.view_selected_tags_by_dim:
+                self.view_selected_tags_by_dim[parent].discard(tag)
+
+    def clear_view_selections(self):
+        for parent, tagmap in self.view_tag_vars.items():
+            for tag, var in tagmap.items():
+                var.set(False)
+        self.view_selected_tags_by_dim = {}
+        # clear thumbnails
+        if self.thumb_inner:
+            for w in self.thumb_inner.winfo_children():
+                w.destroy()
+        self.search_results = []
+
+    # ================================================================
+    # 更新 search_images_by_selected，让缩略图可选中并动态布局
+    # ================================================================
+    def search_images_by_selected(self):
+        # collect selected tags across all dims
+        selected = []
+        for parent, tagvars in self.view_tag_vars.items():
+            for tag, var in tagvars.items():
+                if var.get():
+                    selected.append((parent, tag))
+
+        if not selected:
+            messagebox.showwarning("提示", "请在左侧选择至少一个子标签再搜索")
             return
 
-        # 查出每个标签对应的 tag_id
+        # map selected tags to tag_ids
         tag_ids = []
-        missing = []
-        for name in parts:
-            cursor.execute("SELECT tag_id FROM t_tags WHERE name=?", (name,))
+        for parent, tag in selected:
+            cursor.execute("SELECT tag_id FROM t_tags WHERE parent=? AND name=?", (parent, tag))
             r = cursor.fetchone()
             if r:
                 tag_ids.append(r[0])
-            else:
-                missing.append(name)
-
-        if missing:
-            messagebox.showinfo("提示", f"以下标签未找到：{', '.join(missing)}\n请检查标签名称或先在左侧创建标签。")
-            return
 
         if not tag_ids:
-            messagebox.showinfo("提示", "未找到任何标签ID，取消搜索。")
+            messagebox.showinfo("提示", "所选标签未在数据库中找到（已被删除？）")
             return
 
         mode = self.search_mode_var.get()
-
-        # 根据模式构造 SQL
+        placeholder = ",".join("?" * len(tag_ids))
         if mode == "OR":
-            # OR：任意一个标签匹配
-            placeholder = ",".join("?" * len(tag_ids))
             sql = f"""
                 SELECT DISTINCT f.file_id, f.file_path
                 FROM t_files f
                 JOIN t_files_tags ft ON f.file_id = ft.file_id
                 WHERE ft.tag_id IN ({placeholder})
             """
-            cursor.execute(sql, tag_ids)
-            rows = cursor.fetchall()
         else:
-            # AND：必须同时包含所有标签 —— 使用 GROUP BY + HAVING COUNT = len(tag_ids)
-            placeholder = ",".join("?" * len(tag_ids))
             sql = f"""
                 SELECT f.file_id, f.file_path
                 FROM t_files f
@@ -559,44 +869,165 @@ class ImageManager(tk.Tk):
                 GROUP BY f.file_id
                 HAVING COUNT(DISTINCT ft.tag_id) = {len(tag_ids)}
             """
-            cursor.execute(sql, tag_ids)
-            rows = cursor.fetchall()
+        cursor.execute(sql, tag_ids)
+        rows = cursor.fetchall()
 
-        # 解析路径并过滤不存在的文件
-        abs_paths = []
-        for r in rows:
-            dbp = r[1]
-            abs_p = resolve_path(dbp)
-            if abs_p and os.path.exists(abs_p):
-                abs_paths.append(abs_p)
+        # resolve and filter existing paths
+        abs_paths = [resolve_path(r[1]) for r in rows if r[1] and os.path.exists(resolve_path(r[1]))]
 
         if not abs_paths:
+            # clear previous thumbnails
+            for w in self.thumb_inner.winfo_children():
+                w.destroy()
             messagebox.showinfo("提示", "未找到匹配且存在的图片文件")
             self.search_results = []
+            self.thumb_selected_vars = {}
             return
 
         self.search_results = abs_paths
+        self.thumb_selected_vars = {}  # 保存每个缩略图选中状态
 
-        # 显示缩略图网格
+        # 强制更新画布尺寸，确保获取到正确的宽度
+        self.thumb_canvas.update_idletasks()
+
+        # 渲染缩略图
+        self._render_thumbnails()
+
+        # 绑定窗口大小变化事件，实现动态响应
+        if not hasattr(self, '_resize_bound'):
+            self.thumb_canvas.bind("<Configure>", lambda e: self._on_canvas_resize())
+            self._resize_bound = True
+
+    def _render_thumbnails(self):
+        """根据当前容器宽度渲染缩略图网格"""
+        # clear previous thumbnails
+        for w in self.thumb_inner.winfo_children():
+            w.destroy()
+
+        # 清理之前的列配置
+        for col in self.thumb_inner.grid_slaves():
+            col.grid_forget()
+
+        if not self.search_results:
+            return
+
+        # 确保获取最新的画布宽度
+        self.thumb_canvas.update_idletasks()
+        canvas_width = self.thumb_canvas.winfo_width()
+
+        # 如果宽度太小（比如初始化时），使用一个合理的默认值
+        if canvas_width <= 1:
+            canvas_width = 600  # 默认宽度
+
+        thumb_width = 120  # 缩略图宽度
+        frame_padding = 12  # 每个 frame 的 padx (6*2)
+        item_width = thumb_width + frame_padding + 10  # 额外空间
+
+        # 至少1列，最多根据宽度计算
+        cols = max(1, (canvas_width - 20) // item_width)  # 20是额外边距
+
+        # 配置 thumb_inner 的列权重，确保不超出宽度
+        for col in range(cols):
+            self.thumb_inner.grid_columnconfigure(col, weight=0, minsize=0)
+
+        # populate thumbnail grid in thumb_inner
         for idx, path in enumerate(self.search_results):
             try:
                 img = Image.open(path)
                 img.thumbnail((120, 120))
                 photo = ImageTk.PhotoImage(img)
-                lbl = tk.Label(self.image_frame, image=photo)
+
+                frame = tk.Frame(self.thumb_inner, bd=1, relief="solid", bg="white")
+                frame.grid(row=idx // cols, column=idx % cols, padx=6, pady=6, sticky="n")
+
+                lbl = tk.Label(frame, image=photo, bg="white")
                 lbl.image = photo
-                lbl.grid(row=idx // 6, column=idx % 6, padx=5, pady=5)
-                lbl.bind("<Button-1>", lambda e, p=path: self.show_full_image(p))
+                lbl.pack()
+                lbl.bind("<Double-Button-1>", lambda e, p=path: self.show_full_image(p))
+
+                # 勾选框，默认选中
+                var = tk.BooleanVar(value=True)
+                filename = os.path.basename(path)
+                # 文件名过长时截断显示
+                display_name = filename if len(filename) <= 20 else filename[:17] + "..."
+                chk = tk.Checkbutton(frame, text=display_name, variable=var,
+                                     anchor="w", justify="left", bg="white", wraplength=110)
+                chk.pack(fill="x", padx=2)
+                self.thumb_selected_vars[path] = var
+
+                # 显示该图片的标签信息
+                tags_info = self._get_image_tags(path)
+                if tags_info:
+                    tags_frame = tk.Frame(frame, bg="white")
+                    tags_frame.pack(fill="x", padx=2, pady=(2, 2))
+
+                    for tag_text in tags_info[:3]:  # 最多显示3个标签
+                        tag_label = tk.Label(tags_frame, text=tag_text,
+                                             bg="#e3f2fd", fg="#1976d2",
+                                             font=("Arial", 7),
+                                             padx=3, pady=1, relief="solid", bd=1)
+                        tag_label.pack(side=tk.LEFT, padx=1)
+
+                    if len(tags_info) > 3:
+                        more_label = tk.Label(tags_frame, text=f"+{len(tags_info) - 3}",
+                                              bg="#f5f5f5", fg="#666",
+                                              font=("Arial", 7),
+                                              padx=2, pady=1)
+                        more_label.pack(side=tk.LEFT, padx=1)
             except Exception:
                 continue
 
+    def _on_canvas_resize(self):
+        """窗口大小改变时重新布局缩略图"""
+        if hasattr(self, 'search_results') and self.search_results:
+            # 使用 after 避免频繁重绘
+            if hasattr(self, '_resize_after_id'):
+                self.after_cancel(self._resize_after_id)
+            self._resize_after_id = self.after(200, self._render_thumbnails)
+
+    def _get_image_tags(self, abs_path):
+        """
+        获取指定图片的所有标签
+        返回格式: ["维度:标签", "维度:标签", ...]
+        """
+        try:
+            # 从绝对路径转换回相对路径（用于数据库查询）
+            rel_path = os.path.relpath(abs_path, BASE_DIR)
+
+            # 查询该文件的 file_id
+            cursor.execute("SELECT file_id FROM t_files WHERE file_path=?", (rel_path,))
+            row = cursor.fetchone()
+            if not row:
+                return []
+
+            file_id = row[0]
+
+            # 查询该文件的所有标签
+            sql = """
+                SELECT t.parent, t.name
+                FROM t_tags t
+                JOIN t_files_tags ft ON t.tag_id = ft.tag_id
+                WHERE ft.file_id = ?
+                ORDER BY t.parent, t.name
+            """
+            cursor.execute(sql, (file_id,))
+            tags = cursor.fetchall()
+
+            return [f"{parent}:{name}" for parent, name in tags if name]
+        except Exception:
+            return []
+
     def show_full_image(self, path):
-        # path should be absolute; if not, resolve
         abs_p = resolve_path(path) if not os.path.isabs(path) else path
         try:
             win = tk.Toplevel(self)
             win.title("查看图片")
             img = Image.open(abs_p)
+            # scale large image to reasonable window if necessary
+            w, h = img.size
+            max_w, max_h = 1000, 800
+            if w > max_w or h > max_h:
+                img.thumbnail((max_w, max_h))
             photo = ImageTk.PhotoImage(img)
             lbl = tk.Label(win, image=photo)
             lbl.image = photo
@@ -604,18 +1035,26 @@ class ImageManager(tk.Tk):
         except Exception:
             messagebox.showerror("错误", "打开图片失败（文件可能不存在）")
 
+    # ================================================================
+    # 修改 download_zip，只下载被选中的图片
+    # ================================================================
     def download_zip(self):
-        if not self.search_results:
+        if not hasattr(self, "thumb_selected_vars") or not self.thumb_selected_vars:
             messagebox.showwarning("警告", "没有图片可下载")
             return
+
+        selected_paths = [p for p, var in self.thumb_selected_vars.items() if var.get()]
+        if not selected_paths:
+            messagebox.showwarning("警告", "没有选中图片")
+            return
+
         zip_path = filedialog.asksaveasfilename(
             defaultextension=".zip",
             filetypes=[("Zip文件", "*.zip")]
         )
         if zip_path:
             with zipfile.ZipFile(zip_path, "w") as zf:
-                for p in self.search_results:
-                    # p already absolute path
+                for p in selected_paths:
                     zf.write(p, os.path.basename(p))
             messagebox.showinfo("成功", "压缩包已生成！")
 
