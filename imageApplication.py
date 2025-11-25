@@ -679,20 +679,31 @@ class ImageManager(tk.Tk):
         self.search_results = []
 
     def _bind_mousewheel(self, canvas):
-        """绑定鼠标滚轮到画布"""
+        """绑定鼠标滚轮到画布（仅在鼠标悬停时响应）"""
 
         def on_mousewheel(event):
-            # Windows 和 Linux
-            if event.num == 4 or event.delta > 0:
-                canvas.yview_scroll(-1, "units")
-            elif event.num == 5 or event.delta < 0:
-                canvas.yview_scroll(1, "units")
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        # Windows/MacOS
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
-        # Linux
-        canvas.bind_all("<Button-4>", on_mousewheel)
-        canvas.bind_all("<Button-5>", on_mousewheel)
+        def on_mousewheel_linux_up(event):
+            canvas.yview_scroll(-1, "units")
+
+        def on_mousewheel_linux_down(event):
+            canvas.yview_scroll(1, "units")
+
+        def bind_wheel(event):
+            # 鼠标进入时绑定滚轮事件
+            canvas.bind_all("<MouseWheel>", on_mousewheel)
+            canvas.bind_all("<Button-4>", on_mousewheel_linux_up)
+            canvas.bind_all("<Button-5>", on_mousewheel_linux_down)
+
+        def unbind_wheel(event):
+            # 鼠标离开时解绑滚轮事件
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        canvas.bind("<Enter>", bind_wheel)
+        canvas.bind("<Leave>", unbind_wheel)
 
     def refresh_view_tags(self):
         """
@@ -778,6 +789,10 @@ class ImageManager(tk.Tk):
                         item['header_btn'].config(text=f"▾  {p}")
                         item['open'] = True
 
+                    # 更新滚动区域（展开/折叠后高度变化）
+                    self.left_inner.update_idletasks()
+                    self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+
                 return toggle
 
             btn.config(command=make_toggle(parent))
@@ -786,6 +801,10 @@ class ImageManager(tk.Tk):
         self.view_selected_tags_by_dim = {}
         for parent, tagmap in self.view_tag_vars.items():
             self.view_selected_tags_by_dim[parent] = set(t for t, v in tagmap.items() if v.get())
+
+        # 更新左侧滚动区域
+        self.left_inner.update_idletasks()
+        self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
 
     def _on_view_tag_toggle(self, parent, tag, var):
         if var.get():
@@ -868,6 +887,9 @@ class ImageManager(tk.Tk):
         self.search_results = abs_paths
         self.thumb_selected_vars = {}  # 保存每个缩略图选中状态
 
+        # 强制更新画布尺寸，确保获取到正确的宽度
+        self.thumb_canvas.update_idletasks()
+
         # 渲染缩略图
         self._render_thumbnails()
 
@@ -882,17 +904,31 @@ class ImageManager(tk.Tk):
         for w in self.thumb_inner.winfo_children():
             w.destroy()
 
+        # 清理之前的列配置
+        for col in self.thumb_inner.grid_slaves():
+            col.grid_forget()
+
         if not self.search_results:
             return
 
-        # 动态计算列数（根据容器宽度）
+        # 确保获取最新的画布宽度
+        self.thumb_canvas.update_idletasks()
         canvas_width = self.thumb_canvas.winfo_width()
+
+        # 如果宽度太小（比如初始化时），使用一个合理的默认值
+        if canvas_width <= 1:
+            canvas_width = 600  # 默认宽度
+
         thumb_width = 120  # 缩略图宽度
         frame_padding = 12  # 每个 frame 的 padx (6*2)
         item_width = thumb_width + frame_padding + 10  # 额外空间
 
         # 至少1列，最多根据宽度计算
         cols = max(1, (canvas_width - 20) // item_width)  # 20是额外边距
+
+        # 配置 thumb_inner 的列权重，确保不超出宽度
+        for col in range(cols):
+            self.thumb_inner.grid_columnconfigure(col, weight=0, minsize=0)
 
         # populate thumbnail grid in thumb_inner
         for idx, path in enumerate(self.search_results):
