@@ -645,13 +645,14 @@ class ImageManager(tk.Tk):
         # 绑定鼠标滚轮到左侧面板
         self._bind_mousewheel(self.left_canvas)
 
-        # right: thumbnails area (scrollable)
+        # right: thumbnails area (scrollable with both vertical and horizontal scrollbars)
         right_panel = tk.Frame(main)
         right_panel.pack(side=tk.LEFT, fill="both", expand=True)
 
-        # thumbnail canvas with scrollbar
+        # thumbnail canvas with both scrollbars
         self.thumb_canvas = tk.Canvas(right_panel)
         self.thumb_vsb = tk.Scrollbar(right_panel, orient="vertical", command=self.thumb_canvas.yview)
+        self.thumb_hsb = tk.Scrollbar(right_panel, orient="horizontal", command=self.thumb_canvas.xview)
         self.thumb_inner = tk.Frame(self.thumb_canvas)
 
         self.thumb_inner.bind(
@@ -659,13 +660,20 @@ class ImageManager(tk.Tk):
             lambda e: self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
         )
         self.thumb_canvas.create_window((0, 0), window=self.thumb_inner, anchor="nw")
-        self.thumb_canvas.configure(yscrollcommand=self.thumb_vsb.set)
+        self.thumb_canvas.configure(yscrollcommand=self.thumb_vsb.set, xscrollcommand=self.thumb_hsb.set)
 
-        self.thumb_canvas.pack(side="left", fill="both", expand=True)
-        self.thumb_vsb.pack(side="right", fill="y")
+        self.thumb_canvas.grid(row=0, column=0, sticky="nsew")
+        self.thumb_vsb.grid(row=0, column=1, sticky="ns")
+        self.thumb_hsb.grid(row=1, column=0, sticky="ew")
+        right_panel.grid_rowconfigure(0, weight=1)
+        right_panel.grid_columnconfigure(0, weight=1)
 
         # 绑定鼠标滚轮到缩略图面板
         self._bind_mousewheel(self.thumb_canvas)
+
+        # 加载进度标签（初始隐藏）
+        self.loading_label = tk.Label(right_panel, text="", font=("Arial", 12), fg="#1976d2")
+        self.loading_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # download button below
         bottom_frame = tk.Frame(self.tab_view)
@@ -887,95 +895,160 @@ class ImageManager(tk.Tk):
         self.search_results = abs_paths
         self.thumb_selected_vars = {}  # 保存每个缩略图选中状态
 
+        # 显示加载提示
+        self.loading_label.config(text=f"正在加载 {len(abs_paths)} 张图片...")
+        self.loading_label.lift()  # 置顶显示
+
+        # 清空旧的缩略图
+        for w in self.thumb_inner.winfo_children():
+            w.destroy()
+
         # 强制更新画布尺寸，确保获取到正确的宽度
         self.thumb_canvas.update_idletasks()
 
-        # 渲染缩略图
-        self._render_thumbnails()
+        # 使用分批加载机制，避免卡顿
+        self._render_thumbnails_batch()
 
         # 绑定窗口大小变化事件，实现动态响应
         if not hasattr(self, '_resize_bound'):
             self.thumb_canvas.bind("<Configure>", lambda e: self._on_canvas_resize())
             self._resize_bound = True
 
-    def _render_thumbnails(self):
-        """根据当前容器宽度渲染缩略图网格"""
-        # clear previous thumbnails
-        for w in self.thumb_inner.winfo_children():
-            w.destroy()
-
-        # 清理之前的列配置
-        for col in self.thumb_inner.grid_slaves():
-            col.grid_forget()
-
+    def _render_thumbnails_batch(self):
+        """分批加载缩略图，避免UI卡顿"""
         if not self.search_results:
+            self.loading_label.config(text="")
             return
 
-        # 确保获取最新的画布宽度
+        # 每批加载的数量
+        batch_size = 20
+        current_batch = 0
+        total_images = len(self.search_results)
+
+        # 计算固定的列数（基于当前画布宽度）
         self.thumb_canvas.update_idletasks()
         canvas_width = self.thumb_canvas.winfo_width()
-
-        # 如果宽度太小（比如初始化时），使用一个合理的默认值
         if canvas_width <= 1:
-            canvas_width = 600  # 默认宽度
+            canvas_width = 600
 
-        thumb_width = 120  # 缩略图宽度
-        frame_padding = 12  # 每个 frame 的 padx (6*2)
-        item_width = thumb_width + frame_padding + 10  # 额外空间
+        thumb_width = 120
+        frame_padding = 12
+        item_width = thumb_width + frame_padding + 10
+        cols = max(1, (canvas_width - 20) // item_width)
 
-        # 至少1列，最多根据宽度计算
-        cols = max(1, (canvas_width - 20) // item_width)  # 20是额外边距
+        # 保存列数供后续使用
+        self._current_cols = cols
 
-        # 配置 thumb_inner 的列权重，确保不超出宽度
-        for col in range(cols):
-            self.thumb_inner.grid_columnconfigure(col, weight=0, minsize=0)
+        def load_batch():
+            nonlocal current_batch
+            start_idx = current_batch * batch_size
+            end_idx = min(start_idx + batch_size, total_images)
 
-        # populate thumbnail grid in thumb_inner
-        for idx, path in enumerate(self.search_results):
-            try:
-                img = Image.open(path)
-                img.thumbnail((120, 120))
-                photo = ImageTk.PhotoImage(img)
+            # 更新进度
+            self.loading_label.config(text=f"正在加载... {end_idx}/{total_images}")
 
-                frame = tk.Frame(self.thumb_inner, bd=1, relief="solid", bg="white")
-                frame.grid(row=idx // cols, column=idx % cols, padx=6, pady=6, sticky="n")
+            # 加载当前批次
+            for idx in range(start_idx, end_idx):
+                path = self.search_results[idx]
+                try:
+                    img = Image.open(path)
+                    img.thumbnail((120, 120))
+                    photo = ImageTk.PhotoImage(img)
 
-                lbl = tk.Label(frame, image=photo, bg="white")
-                lbl.image = photo
-                lbl.pack()
-                lbl.bind("<Double-Button-1>", lambda e, p=path: self.show_full_image(p))
+                    frame = tk.Frame(self.thumb_inner, bd=1, relief="solid", bg="white", width=130)
+                    frame.grid(row=idx // cols, column=idx % cols, padx=6, pady=6, sticky="nw")
+                    frame.grid_propagate(False)  # 防止内容撑大frame
 
-                # 勾选框，默认选中
-                var = tk.BooleanVar(value=True)
-                filename = os.path.basename(path)
-                # 文件名过长时截断显示
-                display_name = filename if len(filename) <= 20 else filename[:17] + "..."
-                chk = tk.Checkbutton(frame, text=display_name, variable=var,
-                                     anchor="w", justify="left", bg="white", wraplength=110)
-                chk.pack(fill="x", padx=2)
-                self.thumb_selected_vars[path] = var
+                    lbl = tk.Label(frame, image=photo, bg="white")
+                    lbl.image = photo  # 保持引用
+                    lbl.pack()
+                    lbl.bind("<Double-Button-1>", lambda e, p=path: self.show_full_image(p))
 
-                # 显示该图片的标签信息
-                tags_info = self._get_image_tags(path)
-                if tags_info:
-                    tags_frame = tk.Frame(frame, bg="white")
-                    tags_frame.pack(fill="x", padx=2, pady=(2, 2))
+                    # 勾选框，默认选中
+                    var = tk.BooleanVar(value=True)
+                    filename = os.path.basename(path)
+                    display_name = filename if len(filename) <= 20 else filename[:17] + "..."
+                    chk = tk.Checkbutton(frame, text=display_name, variable=var,
+                                         anchor="w", justify="left", bg="white", wraplength=110)
+                    chk.pack(fill="x", padx=2)
+                    self.thumb_selected_vars[path] = var
 
-                    for tag_text in tags_info[:3]:  # 最多显示3个标签
-                        tag_label = tk.Label(tags_frame, text=tag_text,
-                                             bg="#e3f2fd", fg="#1976d2",
-                                             font=("Arial", 7),
-                                             padx=3, pady=1, relief="solid", bd=1)
-                        tag_label.pack(side=tk.LEFT, padx=1)
+                    # 显示该图片的标签信息
+                    tags_info = self._get_image_tags(path)
+                    if tags_info:
+                        tags_frame = tk.Frame(frame, bg="white")
+                        tags_frame.pack(fill="x", padx=2, pady=(2, 2))
 
-                    if len(tags_info) > 3:
-                        more_label = tk.Label(tags_frame, text=f"+{len(tags_info) - 3}",
-                                              bg="#f5f5f5", fg="#666",
-                                              font=("Arial", 7),
-                                              padx=2, pady=1)
-                        more_label.pack(side=tk.LEFT, padx=1)
-            except Exception:
-                continue
+                        for tag_text in tags_info[:3]:
+                            tag_label = tk.Label(tags_frame, text=tag_text,
+                                                 bg="#e3f2fd", fg="#1976d2",
+                                                 font=("Arial", 7),
+                                                 padx=3, pady=1, relief="solid", bd=1)
+                            tag_label.pack(side=tk.LEFT, padx=1)
+
+                        if len(tags_info) > 3:
+                            more_label = tk.Label(tags_frame, text=f"+{len(tags_info) - 3}",
+                                                  bg="#f5f5f5", fg="#666",
+                                                  font=("Arial", 7),
+                                                  padx=2, pady=1)
+                            more_label.pack(side=tk.LEFT, padx=1)
+                except Exception:
+                    continue
+
+            current_batch += 1
+
+            # 如果还有更多图片，继续加载下一批
+            if end_idx < total_images:
+                # 使用 after 延迟加载，让UI有时间响应
+                self.after(10, load_batch)
+            else:
+                # 全部加载完成
+                self.loading_label.config(text="")
+                self.loading_label.lower()  # 隐藏到底层
+
+        # 开始加载第一批
+        load_batch()
+
+    def _render_thumbnails(self):
+        """窗口调整时重新布局缩略图（快速重排，不重新加载图片）"""
+        if not self.search_results or not hasattr(self, 'thumb_selected_vars'):
+            return
+
+        # 保存当前的选中状态和图片对象
+        saved_data = {}
+        for w in self.thumb_inner.winfo_children():
+            if isinstance(w, tk.Frame):
+                # 尝试获取frame内的组件
+                for child in w.winfo_children():
+                    if isinstance(child, tk.Label) and hasattr(child, 'image'):
+                        # 这是图片label
+                        saved_data[id(w)] = {
+                            'photo': child.image,
+                            'children': list(w.winfo_children())
+                        }
+                        break
+
+        # 重新计算列数
+        self.thumb_canvas.update_idletasks()
+        canvas_width = self.thumb_canvas.winfo_width()
+        if canvas_width <= 1:
+            canvas_width = 600
+
+        thumb_width = 120
+        frame_padding = 12
+        item_width = thumb_width + frame_padding + 10
+        new_cols = max(1, (canvas_width - 20) // item_width)
+
+        # 如果列数没变，不需要重新布局
+        if hasattr(self, '_current_cols') and new_cols == self._current_cols:
+            return
+
+        self._current_cols = new_cols
+
+        # 只重新排列grid位置，不重建控件
+        widgets = [w for w in self.thumb_inner.winfo_children() if isinstance(w, tk.Frame)]
+        for idx, widget in enumerate(widgets):
+            widget.grid(row=idx // new_cols, column=idx % new_cols, padx=6, pady=6, sticky="nw")
 
     def _on_canvas_resize(self):
         """窗口大小改变时重新布局缩略图"""
